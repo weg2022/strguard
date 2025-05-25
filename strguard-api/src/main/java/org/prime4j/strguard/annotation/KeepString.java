@@ -8,5 +8,5 @@ import static java.lang.annotation.ElementType.TYPE;
 
 @Retention(RetentionPolicy.CLASS)
 @Target(value={TYPE})
-public @interface NotStrGuard {
+public @interface KeepString {
 }

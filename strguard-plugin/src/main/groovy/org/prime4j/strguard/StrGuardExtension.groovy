@@ -9,15 +9,22 @@ class StrGuardExtension {
 
     IkeyGenerator keyGenerator = new HardCodeKeyGenerator()
 
-    boolean enabled = true
+    boolean stringGuard = true
 
-    boolean debug = false
+    boolean v9StringConcatEnabled=true
 
-    boolean log=false
+    boolean generateMappings = false
 
-    boolean keepMetadata = true
+    boolean consoleOutput =false
 
-    String[] guardPackages = []
+    boolean removeMetadata = false
 
-    String[] notGuardPackages = []
+
+    String[] stringGuardPackages = []
+
+    String[] keepStringPackages = []
+
+    String[] keepMetadataPackages = []
+
+    String[] removeMetadataPackages = []
 }

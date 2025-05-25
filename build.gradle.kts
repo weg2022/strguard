@@ -16,7 +16,7 @@ buildscript {
 }
 allprojects {
     group = "org.prime4j"
-    version = "1.0.0"
+    version = "1.0.5.14"
 
     repositories {
         maven { url = uri("https://packages.jetbrains.team/maven/p/ij/intellij-dependencies/") }

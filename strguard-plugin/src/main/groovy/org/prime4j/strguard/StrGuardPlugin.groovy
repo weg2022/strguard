@@ -46,7 +46,32 @@ class StrGuardPlugin implements Plugin<Project> {
                     .addMember("value", "{\$T.TYPE}", elementType)
                     .build()
 
-            def annotationType = TypeSpec.annotationBuilder("NotStrGuard")
+            def annotationType = TypeSpec.annotationBuilder("KeepString")
+                    .addModifiers(Modifier.PUBLIC)
+                    .addAnnotation(retentionSpec)
+                    .addAnnotation(targetSpec)
+                    .build()
+
+            def javaFile = JavaFile.builder("org.prime4j.strguard.annotation", annotationType)
+                    .addStaticImport(elementType, "TYPE")
+                    .build()
+            javaFiles.add(javaFile)
+        }
+        {
+            def retention = ClassName.get("java.lang.annotation", "Retention")
+            def target = ClassName.get("java.lang.annotation", "Target")
+            def retentionPolicy = ClassName.get("java.lang.annotation", "RetentionPolicy")
+            def elementType = ClassName.get("java.lang.annotation", "ElementType")
+
+            def retentionSpec = AnnotationSpec.builder(retention)
+                    .addMember("value", "\$T.CLASS", retentionPolicy)
+                    .build()
+
+            def targetSpec = AnnotationSpec.builder(target)
+                    .addMember("value", "{\$T.TYPE}", elementType)
+                    .build()
+
+            def annotationType = TypeSpec.annotationBuilder("KeepMetadata")
                     .addModifiers(Modifier.PUBLIC)
                     .addAnnotation(retentionSpec)
                     .addAnnotation(targetSpec)
@@ -197,25 +222,29 @@ return data;
             project.tasks.named("classes").get().doLast {
                 try {
                     var extension = project.extensions.getByName("strGuard") as StrGuardExtension
-                    if (extension.enabled) {
-                        var logFilePath = Paths.get(project.layout.buildDirectory.get().asFile.toString(), "mappings", "strGuard", "mapping.txt");
+                    if (extension.stringGuard) {
+                        var strLog = Paths.get(project.layout.buildDirectory.get().asFile.toString(), "mappings", "strGuard", "string_guard_mapping.txt");
+                        var metadataLog = Paths.get(project.layout.buildDirectory.get().asFile.toString(), "mappings", "strGuard", "remove_metadata_mapping.txt");
                         var log = new ArrayList<String>()
+                        var log2 = new ArrayList<String>()
                         var strGuard = new StrGuardImpl()
                         var success = false
                         var generator = extension.keyGenerator
                         try {
-                            Files.createDirectories(logFilePath.getParent());
-                        } catch (IOException e) {
-                            e.printStackTrace();
+                            Files.createDirectories(strLog.getParent());
+                        } catch (IOException ignored) {
+
                         }
-                        if (extension.debug && logFilePath.toFile().exists()) {
-                            logFilePath.toFile().delete()
-                        }
+                        if (extension.generateMappings && strLog.toFile().exists())
+                            strLog.toFile().delete()
+
+                        if (extension.generateMappings && metadataLog.toFile().exists())
+                            metadataLog.toFile().delete()
 
                         Files.walk(Paths.get(project.layout.buildDirectory.get().asFile.toString(), "classes"))
                                 .forEach(file -> {
                                     if (file.toFile().isFile() && file.toFile().name.endsWith(".class") && file.toFile().name != "module-info.class") {
-                                        var bytes = transformClass(file.toFile(), strGuard, generator, log, extension);
+                                        var bytes = transformClass(file.toFile(), strGuard, generator, log,log2, extension);
                                         if (bytes != null) {
                                             var output = new BufferedOutputStream(new FileOutputStream(file.toFile()))
                                             output.write(bytes)
@@ -224,12 +253,13 @@ return data;
                                             if (!success)
                                                 success = true
                                         } else {
-                                            println("encode fail:" + file.toFile().absolutePath)
+                                            println("PROCESS FAIL:" + file.toFile().absolutePath)
                                         }
                                     }
                                 });
-                        if (extension.debug) {
-                            writeLogsToFile(logFilePath, log);
+                        if (extension.generateMappings) {
+                            writeLogsToFile(strLog, log);
+                            writeLogsToFile(metadataLog, log2);
                         }
                     }
 
@@ -248,22 +278,22 @@ return data;
         }
     }
 
-    private static byte[] transformClass(File file, IStrGuard strGuard, IkeyGenerator generator, List<String> logs, StrGuardExtension extension) {
+    private static byte[] transformClass(File file, IStrGuard strGuard, IkeyGenerator generator, List<String> strLog, List<String> metadataLog,StrGuardExtension extension) {
         try {
             byte[] classBytes = Files.readAllBytes(file.toPath());
             var cr = new ClassReader(classBytes);
             var cw = new ClassWriter(cr, ClassWriter.COMPUTE_MAXS);
             var className = cr.getClassName()
             ClassVisitor visitor;
-            if (isStrGuardPackages(className, extension.guardPackages, extension.notGuardPackages)) {
-                if (extension.log) {
-                    println("StrGuard[Encrypt]: " + className)
-                }
-                visitor = new StrGuardClassVisitor(strGuard, logs, StrGuard.class.name, cw, generator, extension.keepMetadata)
+            if (isStrGuardPackages(className, extension.stringGuardPackages, extension.keepStringPackages)) {
+                if (extension.consoleOutput)
+                    println("StrGuard[PROCESS]: " + className)
+
+                visitor = new StrGuardClassVisitor(strGuard, strLog,metadataLog, StrGuard.class.name, cw, generator, extension,className)
             } else {
-                if (extension.log) {
+                if (extension.consoleOutput)
                     println("StrGuard[SKIP]: " + className)
-                }
+
                 visitor = new ClassVisitor(Opcodes.ASM9, cw) {}
             }
             cr.accept(visitor, ClassReader.EXPAND_FRAMES);
