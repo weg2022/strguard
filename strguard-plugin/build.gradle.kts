@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "io.github.weg2022"
-version = "1.0.0"
+version = "1.0.1"
 
 repositories {
     mavenCentral()
@@ -22,10 +22,10 @@ dependencies {
     implementation(gradleApi())
     implementation(localGroovy())
     implementation("com.squareup:javapoet:1.13.0")
-    implementation("org.ow2.asm:asm:9.8")
-    implementation("org.ow2.asm:asm-commons:9.8")
-    implementation("org.ow2.asm:asm-util:9.8")
-    implementation("org.ow2.asm:asm-tree:9.8")
+    implementation("org.ow2.asm:asm:9.9")
+    implementation("org.ow2.asm:asm-commons:9.9")
+    implementation("org.ow2.asm:asm-util:9.9")
+    implementation("org.ow2.asm:asm-tree:9.9")
 }
 
 gradlePlugin {

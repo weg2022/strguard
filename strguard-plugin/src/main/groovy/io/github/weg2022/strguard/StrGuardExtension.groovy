@@ -26,4 +26,20 @@ class StrGuardExtension {
     String[] keepMetadataPackages = []
 
     String[] removeMetadataPackages = []
+
+    void setStringGuardPackages(String... packages) {
+        this.stringGuardPackages = packages
+    }
+
+    void setKeepStringPackages(String... packages) {
+        this.keepStringPackages = packages
+    }
+
+    void setKeepMetadataPackages(String... packages) {
+        this.keepMetadataPackages = packages
+    }
+
+    void setRemoveMetadataPackages(String... packages) {
+        this.removeMetadataPackages = packages
+    }
 }

@@ -59,12 +59,23 @@ class StrGuardPlugin implements Plugin<Project> {
                 try {
                     var extension = project.extensions.getByName("strGuard") as StrGuardExtension
                     if (extension.stringGuard) {
+                        // Debug: print configuration
+                        if (extension.consoleOutput) {
+                            println("=== StrGuard Configuration ===")
+                            println("stringGuardPackages: ${extension.stringGuardPackages?.toList()}")
+                            println("stringGuardPackages.length: ${extension.stringGuardPackages?.length}")
+                            println("keepStringPackages: ${extension.keepStringPackages?.toList()}")
+                            println("v9StringConcatEnabled: ${extension.v9StringConcatEnabled}")
+                            println("generateMappings: ${extension.generateMappings}")
+                            println("removeMetadata: ${extension.removeMetadata}")
+                            println("==============================")
+                        }
+
                         var strLog = Paths.get(project.layout.buildDirectory.get().asFile.toString(), "mappings", "strGuard", "string_guard_mapping.txt")
                         var metadataLog = Paths.get(project.layout.buildDirectory.get().asFile.toString(), "mappings", "strGuard", "remove_metadata_mapping.txt")
                         var log = new ArrayList<String>()
                         var log2 = new ArrayList<String>()
                         var strGuard = new StrGuardImpl()
-                        var success = false
                         var generator = extension.keyGenerator
                         try {
                             Files.createDirectories(strLog.getParent())
@@ -81,20 +92,16 @@ class StrGuardPlugin implements Plugin<Project> {
                                 .forEach(file -> {
                                     if (file.toFile().isFile() && file.toFile().name.endsWith(".class") && file.toFile().name != "module-info.class") {
                                         def bytes = transformClass(file.toFile(), strGuard, generator, log, log2, extension)
-                                        if (bytes != null) {
-                                            if (bytes.length == 0) {
-
-                                            } else {
-                                                var output = new BufferedOutputStream(new FileOutputStream(file.toFile()))
+                                        if (bytes == null) {
+                                            println("PROCESS FAIL:" + file.toFile().absolutePath)
+                                        } else if (bytes.length > 0) {
+                                            // Only write if bytes were actually transformed
+                                            try (var output = new BufferedOutputStream(new FileOutputStream(file.toFile()))) {
                                                 output.write(bytes)
                                                 output.flush()
-                                                output.close()
-                                                if (!success)
-                                                    success = true
                                             }
-                                        } else {
-                                            println("PROCESS FAIL:" + file.toFile().absolutePath)
                                         }
+                                        // bytes.length == 0 means class was skipped, do nothing
                                     }
                                 })
                         if (extension.generateMappings) {
@@ -310,32 +317,58 @@ return data;
             "io.github.weg2022.strguard"
     ]
 
+
     private static boolean isStrGuardPackages(String className, String[] guardPackages, String[] notGuardPackages) {
         if (className == null || className.trim().isEmpty()) {
             return false
         }
-        whiteList.each { var name ->
-            if (className.replace('/', '.').startsWith(name + ".")) {
+
+
+        String dotted = className.replace('/', '.')
+        String slashed = className // 原始的 internal name
+
+
+        // Check whitelist - skip these packages
+        for (String name : whiteList) {
+            if (dotted == name || dotted.startsWith(name + ".")) {
                 return false
             }
         }
 
+
+        // Check packages that should NOT be guarded
         if (notGuardPackages != null && notGuardPackages.length > 0) {
-            notGuardPackages.each { var name ->
-                if (className.replace('/', '.').startsWith(name + ".")) {
+            for (String name : notGuardPackages) {
+                if (name == null || name.trim().isEmpty()) continue
+                if (dotted == name || dotted.startsWith(name + ".")) {
+                    return false
+                }
+                String slashName = name.replace('.', '/')
+                if (slashed == slashName || slashed.startsWith(slashName + "/")) {
                     return false
                 }
             }
         }
 
+
+        // Check packages that SHOULD be guarded
         if (guardPackages != null && guardPackages.length > 0) {
-            guardPackages.each { var name ->
-                if (className.replace('/', '.').startsWith(name + ".")) {
+            for (String name : guardPackages) {
+                if (name == null || name.trim().isEmpty()) continue
+                String pkg = name.endsWith(".") ? name.substring(0, name.length() - 1) : name
+                String slashPkg = pkg.replace('.', '/')
+                if (dotted == pkg || dotted.startsWith(pkg + ".")) {
+                    return true
+                }
+                if (slashed == slashPkg || slashed.startsWith(slashPkg + "/")) {
                     return true
                 }
             }
+            return false
         }
-        return false
+
+        return true
     }
+
 
 }
