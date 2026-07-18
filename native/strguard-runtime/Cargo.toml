@@ -1,0 +1,23 @@
+[package]
+name = "strguard-native"
+version = "2.0.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+chacha20poly1305 = "0.10.1"
+hkdf = "0.12.4"
+jni = "0.21.1"
+sha2 = "0.10.9"
+zeroize = "1.8.1"
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+opt-level = 3
+panic = "abort"
+strip = "symbols"
