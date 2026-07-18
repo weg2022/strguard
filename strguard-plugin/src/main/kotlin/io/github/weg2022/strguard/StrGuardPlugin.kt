@@ -15,6 +15,14 @@ class StrGuardPlugin : Plugin<Project> {
         extension.releaseSeedHex.convention(
             project.providers.environmentVariable("STRGUARD_RELEASE_SEED_HEX"),
         )
+        val hostTarget =
+            project.providers.systemProperty("os.name")
+                .zip(project.providers.systemProperty("os.arch")) { osName, architecture ->
+                    NativeTarget.detectHost(osName, architecture).rustTriple
+                }
+        extension.targetTriple.convention(
+            project.providers.environmentVariable("STRGUARD_TARGET_TRIPLE").orElse(hostTarget),
+        )
         val supportClasses: TaskProvider<PrepareSupportClassesTask> =
             project.tasks.register(
                 "prepareStrGuardSupportClasses",
@@ -87,6 +95,7 @@ class StrGuardPlugin : Plugin<Project> {
                     .orElse("missing"),
             )
             task.moduleIdentity.convention("${project.group}:${project.name}:${project.path}")
+            task.targetTriple.convention(extension.targetTriple)
             task.java9StringConcatEnabled.convention(extension.java9StringConcatEnabled)
             task.consoleOutput.convention(extension.consoleOutput)
             task.removeMetadata.convention(extension.removeMetadata)
@@ -106,9 +115,9 @@ class StrGuardPlugin : Plugin<Project> {
             task.nativeInputDirectory.convention(transformTask.flatMap { it.nativeInputDirectory })
             task.outputDirectory.convention(project.layout.buildDirectory.dir("strguard/native-resources/main"))
             task.nativeEnabled.convention(extension.enabled)
-            task.targetTriple.convention("x86_64-pc-windows-msvc")
+            task.targetTriple.convention(extension.targetTriple)
             task.cargoExecutable.convention("cargo")
-            task.runtimeTemplateVersion.convention("3")
+            task.runtimeTemplateVersion.convention("4")
         })
 
         project.tasks.named(JavaPlugin.CLASSES_TASK_NAME).configure { classesTask ->

@@ -11,6 +11,9 @@ abstract class StrGuardExtension @Inject constructor(objects: ObjectFactory) {
     /** 256-bit release seed encoded as exactly 64 hexadecimal characters. */
     val releaseSeedHex: Property<String> = objects.property(String::class.java)
 
+    /** Rust target triple for the generated desktop Native runtime. */
+    val targetTriple: Property<String> = objects.property(String::class.java)
+
     val java9StringConcatEnabled: Property<Boolean> =
         objects.property(Boolean::class.java).convention(true)
 

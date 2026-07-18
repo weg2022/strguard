@@ -50,6 +50,9 @@ abstract class TransformClassesTask : DefaultTask() {
     abstract val moduleIdentity: Property<String>
 
     @get:Input
+    abstract val targetTriple: Property<String>
+
+    @get:Input
     abstract val java9StringConcatEnabled: Property<Boolean>
 
     @get:Input
@@ -85,7 +88,8 @@ abstract class TransformClassesTask : DefaultTask() {
         val sources = collectInputFiles()
         val inputDigest = digestInputs(sources)
         val seed = validatedSeed(settings.enabled)
-        val vaultBuilder = SecureVaultBuilder(seed, moduleIdentity.get(), inputDigest)
+        val nativeTarget = NativeTarget.fromRustTriple(targetTriple.get())
+        val vaultBuilder = SecureVaultBuilder(seed, moduleIdentity.get(), inputDigest, nativeTarget)
 
         val destination = outputDirectory.get().asFile.toPath()
         val nativeInputs = nativeInputDirectory.get().asFile.toPath()

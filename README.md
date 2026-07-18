@@ -11,20 +11,20 @@ See [the StrGuard 2 threat model](docs/strguard-2-threat-model.md) for the secur
 The current 2.0 milestone supports:
 
 * Java and Kotlin/JVM Gradle modules
-* Windows x64 (`x86_64-pc-windows-msvc`) Native runtime generation
+* Windows x64, Linux x64, and macOS x64/arm64 Native runtime generation
 * Regular `LDC` literals and static final string constants
 * Java 9+ `StringConcatFactory.makeConcatWithConstants` concatenation
 * Kotlin/JVM string templates compiled to ordinary string operations
 * Optional Kotlin metadata annotation removal
 * Reproducible per-module output for the same seed, inputs, and toolchain
 
-Android application/library integration, Linux, macOS, and Android arm64 Native targets remain follow-up milestones. The plugin currently rejects Android and Kotlin Multiplatform modules instead of silently producing an incomplete artifact.
+Windows x64 is covered by a runtime JNI test in the current development environment. Linux and macOS mappings are unit tested but still require their corresponding host/linker CI jobs. Android application/library integration and Android arm64 remain follow-up milestones. The plugin currently rejects Android and Kotlin Multiplatform modules instead of silently producing an incomplete artifact.
 
 ## Requirements
 
 * JDK 17 or newer
 * Gradle 8.14 or newer
-* Rust and Cargo with the `x86_64-pc-windows-msvc` target
+* Rust and Cargo with the selected target and its required linker
 * A Java or Kotlin/JVM module
 
 Check the Native toolchain with:
@@ -54,7 +54,7 @@ Every protected build requires a 256-bit seed encoded as exactly 64 hexadecimal 
 STRGUARD_RELEASE_SEED_HEX=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 ```
 
-The same seed, module identity, inputs, and toolchain produce the same transformed classes and Native inputs. Use different seeds for different trust domains. Treat `build/strguard/native-input` as a sensitive build intermediate because it contains encoded Native key material.
+The same seed, module identity, target, inputs, and toolchain produce the same transformed classes and Native inputs. Use different seeds for different trust domains. Treat `build/strguard/native-input` as a sensitive build intermediate because it contains encoded Native key material.
 
 ## Configuration
 
@@ -64,6 +64,9 @@ strGuard {
 
     // Optional when STRGUARD_RELEASE_SEED_HEX is present.
     releaseSeedHex.set(providers.environmentVariable("STRGUARD_RELEASE_SEED_HEX"))
+
+    // Defaults to the current desktop host. STRGUARD_TARGET_TRIPLE can also override it.
+    targetTriple.set("x86_64-pc-windows-msvc")
 
     // Empty means every application package except StrGuard support classes.
     stringGuardPackages.set(listOf("com.example.app"))
@@ -76,6 +79,15 @@ strGuard {
     removeMetadataPackages.set(listOf("com.example.app"))
     keepMetadataPackages.set(listOf("com.example.app.reflective"))
 }
+```
+
+Supported target triples are:
+
+```text
+x86_64-pc-windows-msvc
+x86_64-unknown-linux-gnu
+x86_64-apple-darwin
+aarch64-apple-darwin
 ```
 
 `stringGuardPackages` is strongly recommended for production builds. An empty list deliberately means every non-StrGuard application class.
@@ -104,7 +116,7 @@ build/strguard/native-resources/main
 build/reports/strguard/main
 ```
 
-The standard `jar`, runtime, and test classpaths use transformed classes and generated Native resources. The final JAR contains a randomized bridge, the Native loader, annotations, and a build-specific DLL. It does not contain the former JVM `StrGuardRuntime` decoder.
+The standard `jar`, runtime, and test classpaths use transformed classes and generated Native resources. The final JAR contains a randomized bridge, the Native loader, annotations, and a build-specific dynamic library. It does not contain the former JVM `StrGuardRuntime` decoder.
 
 ## Compatibility notes
 
@@ -120,7 +132,7 @@ The standard `jar`, runtime, and test classpaths use transformed classes and gen
 .\gradlew.bat :strguard-plugin:check :strguard-plugin:validatePlugins
 ```
 
-The test suite covers Java/Kotlin runtime decoding, JAR packaging, configuration-cache reuse, deterministic and authenticated vault generation, Native key constant-folding checks, and a static attack harness that recovers the 1.x XOR format.
+The test suite covers Java/Kotlin runtime decoding, JAR packaging, configuration-cache reuse, desktop target mapping, deterministic and authenticated vault generation, Native key constant-folding checks, and a static attack harness that recovers the 1.x XOR format.
 
 ## License
 

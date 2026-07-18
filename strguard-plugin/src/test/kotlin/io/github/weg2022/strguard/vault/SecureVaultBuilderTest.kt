@@ -1,7 +1,7 @@
 package io.github.weg2022.strguard.vault
 
+import io.github.weg2022.strguard.NativeTarget
 import io.github.weg2022.strguard.crypto.CryptoPrimitives
-import org.junit.jupiter.api.io.TempDir
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.StandardCharsets
@@ -11,7 +11,13 @@ import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
-import kotlin.test.*
+import kotlin.test.Test
+import kotlin.test.assertContentEquals
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
+import org.junit.jupiter.api.io.TempDir
 
 class SecureVaultBuilderTest {
     @TempDir
@@ -22,11 +28,23 @@ class SecureVaultBuilderTest {
         val first = buildVault(temporaryDirectory.resolve("first"), INPUT_DIGEST)
         val repeated = buildVault(temporaryDirectory.resolve("repeated"), INPUT_DIGEST)
         val changed = buildVault(temporaryDirectory.resolve("changed"), CHANGED_INPUT_DIGEST)
+        val linux =
+            buildVault(
+                temporaryDirectory.resolve("linux"),
+                INPUT_DIGEST,
+                NativeTarget.LINUX_X64,
+            )
 
         assertContentEquals(first.vault, repeated.vault)
         assertContentEquals(first.nativeConfig, repeated.nativeConfig)
         assertEquals(first.model.bridge, repeated.model.bridge)
         assertNotEquals(first.model.bridge.internalClassName, changed.model.bridge.internalClassName)
+        assertNotEquals(first.model.bridge.internalClassName, linux.model.bridge.internalClassName)
+        assertEquals(
+            "META-INF/strguard/native/linux-x86_64/${linux.model.bridge.nativeLibraryFileName}",
+            linux.model.bridge.nativeLibraryResourcePath,
+        )
+        assertEquals(".so", linux.model.bridge.nativeLibraryFileName.takeLast(3))
         assertFalse(first.vault.asText().contains(FIRST_SECRET))
         assertFalse(first.vault.asText().contains(TEST_RELEASE_SEED))
         assertFalse(first.nativeConfig.asText().contains(FIRST_SECRET))
@@ -61,8 +79,12 @@ class SecureVaultBuilderTest {
         }
     }
 
-    private fun buildVault(directory: Path, inputDigest: ByteArray): BuiltVault {
-        val builder = SecureVaultBuilder(TEST_RELEASE_SEED, MODULE_IDENTITY, inputDigest)
+    private fun buildVault(
+        directory: Path,
+        inputDigest: ByteArray,
+        nativeTarget: NativeTarget = NativeTarget.WINDOWS_X64,
+    ): BuiltVault {
+        val builder = SecureVaultBuilder(TEST_RELEASE_SEED, MODULE_IDENTITY, inputDigest, nativeTarget)
         val references =
             listOf(
                 requireNotNull(builder.protect(FIRST_SECRET, "sample/Secrets#first()Ljava/lang/String;:ldc:0")),

@@ -26,6 +26,7 @@ class StaticAttackHarnessTest {
                 TEST_RELEASE_SEED,
                 "io.github.weg2022:attack-fixture::attack-fixture",
                 CryptoPrimitives.sha256(originalClass),
+                NativeTarget.WINDOWS_X64,
             )
         val transformed =
             ClassTransformer.transform(

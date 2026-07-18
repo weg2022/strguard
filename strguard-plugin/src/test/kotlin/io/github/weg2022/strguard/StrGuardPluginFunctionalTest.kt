@@ -106,15 +106,21 @@ class StrGuardPluginFunctionalTest {
         }
 
         val artifact = projectDirectory.resolve("build/libs/java-consumer.jar")
+        val nativeTarget = hostNativeTarget()
         JarFile(artifact.toFile()).use { jar ->
             val entry = assertNotNull(jar.getJarEntry("sample/JavaExample.class"))
             val contents = jar.getInputStream(entry).readBytes().toString(StandardCharsets.ISO_8859_1)
             assertFalse(contents.contains("java-constant"))
             assertNotNull(jar.getJarEntry("io/github/weg2022/strguard/runtime/NativeLibraryLoader.class"))
-            assertTrue(jar.entries().asSequence().any { it.name.startsWith("META-INF/strguard/native/") && it.name.endsWith(".dll") })
+            assertTrue(
+                jar.entries().asSequence().any {
+                    it.name.startsWith("META-INF/strguard/native/${nativeTarget.resourceDirectory}/") &&
+                        it.name.endsWith(nativeTarget.libraryExtension)
+                },
+            )
             assertTrue(jar.getJarEntry("io/github/weg2022/strguard/runtime/StrGuardRuntime.class") == null)
         }
-        val nativeLibrary = findNativeLibrary(nativeResources)
+        val nativeLibrary = findNativeLibrary(nativeResources, nativeTarget)
         assertFalse(classContains(nativeLibrary, "java-constant"))
         assertFalse(classContains(nativeLibrary, "prefix-"))
         assertFalse(classContains(nativeLibrary, TEST_RELEASE_SEED))
@@ -225,12 +231,20 @@ class StrGuardPluginFunctionalTest {
     private fun classContains(classFile: Path, value: String): Boolean =
         Files.readAllBytes(classFile).toString(StandardCharsets.ISO_8859_1).contains(value)
 
-    private fun findNativeLibrary(nativeResources: Path): Path =
+    private fun findNativeLibrary(nativeResources: Path, nativeTarget: NativeTarget): Path =
         Files.walk(nativeResources).use { paths ->
-            paths.filter { Files.isRegularFile(it) && it.fileName.toString().endsWith(".dll") }
+            paths.filter {
+                Files.isRegularFile(it) && it.fileName.toString().endsWith(nativeTarget.libraryExtension)
+            }
                 .findFirst()
                 .orElseThrow { AssertionError("No StrGuard Native library was generated") }
         }
+
+    private fun hostNativeTarget(): NativeTarget =
+        NativeTarget.detectHost(
+            System.getProperty("os.name"),
+            System.getProperty("os.arch"),
+        )
 
     private fun readGeneratedKeyMaterial(nativeConfig: Path): GeneratedKeyMaterial {
         val source = Files.readString(nativeConfig)

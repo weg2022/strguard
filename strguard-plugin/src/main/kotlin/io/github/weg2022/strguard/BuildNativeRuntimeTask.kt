@@ -45,10 +45,8 @@ abstract class BuildNativeRuntimeTask : DefaultTask() {
             return
         }
 
-        val target = targetTriple.get()
-        if (target != WINDOWS_X64_TARGET) {
-            throw GradleException("StrGuard 2 currently validates only $WINDOWS_X64_TARGET, got $target")
-        }
+        val nativeTarget = NativeTarget.fromRustTriple(targetTriple.get())
+        val target = nativeTarget.rustTriple
         val inputs = nativeInputDirectory.get().asFile.toPath().toAbsolutePath().normalize()
         val workspace = temporaryDir.toPath().resolve("native-runtime")
         val cargoTarget = temporaryDir.toPath().resolve("cargo-target")
@@ -90,7 +88,16 @@ abstract class BuildNativeRuntimeTask : DefaultTask() {
         Files.newInputStream(inputs.resolve("runtime.properties")).use(metadata::load)
         val resourcePath = metadata.getProperty("resourcePath")
             ?: throw GradleException("StrGuard runtime metadata has no resourcePath")
-        val compiledLibrary = cargoTarget.resolve(target).resolve("release").resolve("strguard_native.dll")
+        val fileName = metadata.getProperty("fileName")
+            ?: throw GradleException("StrGuard runtime metadata has no fileName")
+        val expectedResourcePath = "META-INF/strguard/native/${nativeTarget.resourceDirectory}/$fileName"
+        if (resourcePath != expectedResourcePath) {
+            throw GradleException(
+                "StrGuard runtime metadata target mismatch: expected $expectedResourcePath, got $resourcePath",
+            )
+        }
+        val compiledLibrary =
+            cargoTarget.resolve(target).resolve("release").resolve(nativeTarget.cargoLibraryFileName)
         if (!Files.isRegularFile(compiledLibrary)) {
             throw GradleException("Cargo did not produce $compiledLibrary")
         }
@@ -120,5 +127,3 @@ abstract class BuildNativeRuntimeTask : DefaultTask() {
         Files.createDirectories(directory)
     }
 }
-
-private const val WINDOWS_X64_TARGET = "x86_64-pc-windows-msvc"

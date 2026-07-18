@@ -1,5 +1,6 @@
 package io.github.weg2022.strguard.vault
 
+import io.github.weg2022.strguard.NativeTarget
 import io.github.weg2022.strguard.crypto.CryptoPrimitives
 import java.io.BufferedOutputStream
 import java.io.DataOutputStream
@@ -12,21 +13,25 @@ internal class SecureVaultBuilder(
     releaseSeedHex: String,
     moduleIdentity: String,
     inputDigest: ByteArray,
+    private val nativeTarget: NativeTarget,
 ) {
     private val releaseSeed = CryptoPrimitives.parseHex256(releaseSeedHex)
     private val moduleBytes = CryptoPrimitives.utf8(moduleIdentity)
+    private val targetBytes = CryptoPrimitives.utf8(nativeTarget.rustTriple)
     private val buildId =
         CryptoPrimitives.hmacSha256(
             releaseSeed,
             BUILD_ID_LABEL,
             moduleBytes,
+            byteArrayOf(0),
+            targetBytes,
             inputDigest,
         ).copyOf(BUILD_ID_SIZE)
     private val masterKey =
         CryptoPrimitives.hkdfSha256(
             inputKeyMaterial = releaseSeed,
             salt = inputDigest,
-            info = BUILD_KEY_LABEL + moduleBytes,
+            info = BUILD_KEY_LABEL + moduleBytes + byteArrayOf(0) + targetBytes,
             outputLength = KEY_SIZE,
         )
     private val records = mutableListOf<VaultRecord>()
@@ -170,11 +175,12 @@ internal class SecureVaultBuilder(
             List(GATEWAY_COUNT) { index ->
                 "m${deterministicHex(METHOD_NAME_LABEL + byteArrayOf(index.toByte()), 10)}"
             }
-        val fileName = "sg_$librarySuffix.dll"
+        val fileName = nativeTarget.packagedLibraryFileName(librarySuffix)
         return BridgeModel(
             internalClassName = "io/github/weg2022/strguard/generated/B$classSuffix",
             methodNames = methodNames,
-            nativeLibraryResourcePath = "META-INF/strguard/native/windows-x86_64/$fileName",
+            nativeLibraryResourcePath =
+                "META-INF/strguard/native/${nativeTarget.resourceDirectory}/$fileName",
             nativeLibraryFileName = fileName,
         )
     }
