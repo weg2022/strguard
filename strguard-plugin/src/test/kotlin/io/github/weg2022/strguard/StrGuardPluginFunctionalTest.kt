@@ -33,7 +33,7 @@ class StrGuardPluginFunctionalTest {
             }
 
             tasks.withType<JavaCompile>().configureEach {
-                options.release.set(17)
+                options.release.set(11)
             }
 
             strGuard {
@@ -87,6 +87,10 @@ class StrGuardPluginFunctionalTest {
         val transformedClasses = projectDirectory.resolve("build/strguard/classes/main")
         val nativeResources = projectDirectory.resolve("build/strguard/native-resources/main")
         val transformedExample = transformedClasses.resolve("sample/JavaExample.class")
+        assertEquals(
+            JAVA_11_CLASS_VERSION,
+            ClassReader(Files.readAllBytes(transformedExample)).readShort(6).toInt() and 0xffff,
+        )
         assertFalse(classContains(transformedExample, "java-constant"))
         assertFalse(classContains(transformedExample, "prefix-"))
         assertFalse(classContains(transformedExample, TEST_RELEASE_SEED))
@@ -115,7 +119,7 @@ class StrGuardPluginFunctionalTest {
             assertTrue(
                 jar.entries().asSequence().any {
                     it.name.startsWith("META-INF/strguard/native/${nativeTarget.resourceDirectory}/") &&
-                        it.name.endsWith(nativeTarget.libraryExtension)
+                            it.name.endsWith(nativeTarget.libraryExtension)
                 },
             )
             assertTrue(jar.getJarEntry("io/github/weg2022/strguard/runtime/StrGuardRuntime.class") == null)
@@ -320,4 +324,5 @@ private const val TEST_RELEASE_SEED =
     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 private const val KEY_SHARE_COUNT = 4
 private const val KEY_SIZE = 32
+private const val JAVA_11_CLASS_VERSION = 55
 private val HEX_BYTE = Regex("0x([0-9a-f]{2})")

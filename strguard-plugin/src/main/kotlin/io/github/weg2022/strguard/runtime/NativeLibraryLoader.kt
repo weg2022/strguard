@@ -10,7 +10,7 @@ object NativeLibraryLoader {
     fun extract(anchor: Class<*>, resourcePath: String, fileName: String): String {
         val classLoader = anchor.classLoader ?: ClassLoader.getSystemClassLoader()
         val resource = classLoader.getResourceAsStream(resourcePath)
-            ?: throw IllegalStateException("Missing StrGuard Native runtime resource")
+            ?: throw IllegalStateException("Missing StrGuard Native runtime resource '$resourcePath'")
         val directory = Files.createTempDirectory("sg2-")
         val library = directory.resolve(fileName)
         // Kotlin's use() would add a kotlin-stdlib dependency to the injected runtime helper.

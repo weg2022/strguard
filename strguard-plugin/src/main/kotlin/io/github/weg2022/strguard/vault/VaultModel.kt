@@ -5,6 +5,8 @@ internal data class BridgeModel(
     val methodNames: List<String>,
     val nativeLibraryResourcePath: String,
     val nativeLibraryFileName: String,
+    val nativeLibraryLoadName: String,
+    val extractFromResources: Boolean,
 )
 
 internal data class VaultReference(

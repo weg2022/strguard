@@ -1,20 +1,14 @@
 package io.github.weg2022.strguard
 
-import java.nio.file.Files
-import java.nio.file.Path
-import java.nio.file.StandardCopyOption
-import java.util.Properties
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.provider.Property
-import org.gradle.api.tasks.Input
-import org.gradle.api.tasks.InputDirectory
-import org.gradle.api.tasks.OutputDirectory
-import org.gradle.api.tasks.PathSensitive
-import org.gradle.api.tasks.PathSensitivity
-import org.gradle.api.tasks.TaskAction
+import org.gradle.api.tasks.*
 import org.gradle.work.DisableCachingByDefault
+import java.io.IOException
+import java.nio.file.*
+import java.util.*
 
 @DisableCachingByDefault(because = "Native compiler reproducibility is validated separately per toolchain")
 abstract class BuildNativeRuntimeTask : DefaultTask() {
@@ -46,6 +40,9 @@ abstract class BuildNativeRuntimeTask : DefaultTask() {
         }
 
         val nativeTarget = NativeTarget.fromRustTriple(targetTriple.get())
+        if (!nativeTarget.extractFromResources) {
+            throw GradleException("Android Native targets must be built through an Android variant")
+        }
         val target = nativeTarget.rustTriple
         val inputs = nativeInputDirectory.get().asFile.toPath().toAbsolutePath().normalize()
         val workspace = temporaryDir.toPath().resolve("native-runtime")
@@ -66,19 +63,31 @@ abstract class BuildNativeRuntimeTask : DefaultTask() {
                 target,
             )
         val process =
-            ProcessBuilder(command)
-                .directory(workspace.toFile())
-                .redirectErrorStream(true)
-                .apply {
-                    environment()["STRGUARD_CONFIG_DIR"] = inputs.toString()
-                    environment()["CARGO_TARGET_DIR"] = cargoTarget.toAbsolutePath().toString()
-                    environment()["SOURCE_DATE_EPOCH"] = "0"
-                }
-                .start()
+            try {
+                ProcessBuilder(command)
+                    .directory(workspace.toFile())
+                    .redirectErrorStream(true)
+                    .apply {
+                        environment()["STRGUARD_CONFIG_DIR"] = inputs.toString()
+                        environment()["CARGO_TARGET_DIR"] = cargoTarget.toAbsolutePath().toString()
+                        environment()["SOURCE_DATE_EPOCH"] = "0"
+                    }
+                    .start()
+            } catch (failure: IOException) {
+                throw GradleException(
+                    "StrGuard cannot start Cargo executable '${cargoExecutable.get()}' for target $target. " +
+                            "Install Rust and Cargo, then add the target with 'rustup target add $target'.",
+                    failure,
+                )
+            }
         val processOutput = process.inputStream.bufferedReader().use { it.readText() }
         val exitCode = process.waitFor()
         if (exitCode != 0) {
-            throw GradleException("StrGuard Rust runtime build failed:\n$processOutput")
+            throw GradleException(
+                "StrGuard Rust runtime build failed for target $target " +
+                        "(command: ${command.joinToString(" ")}):\n$processOutput\n" +
+                        "Ensure Cargo is available and run 'rustup target add $target'.",
+            )
         }
         if (processOutput.isNotBlank()) {
             logger.info(processOutput.trim())

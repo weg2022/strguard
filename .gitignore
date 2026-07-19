@@ -1,10 +1,13 @@
 .gradle
+.opencode/
+local.properties
 build/
 !gradle/wrapper/gradle-wrapper.jar
 !**/src/main/**/build/
 !**/src/test/**/build/
 
 ### IntelliJ IDEA ###
+.kotlin/
 .idea/modules.xml
 .idea/jarRepositories.xml
 .idea/compiler.xml

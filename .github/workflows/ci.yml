@@ -1,0 +1,133 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  STRGUARD_RELEASE_SEED_HEX: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+
+jobs:
+  quality:
+    name: JDK ${{ matrix.java }} quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        java: [17, 21]
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+          targets: x86_64-unknown-linux-gnu
+      - uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6
+      - name: Run complete plugin checks
+        run: >-
+          bash ./gradlew :strguard-plugin:check :strguard-plugin:validatePlugins
+          --stacktrace
+      - name: Verify all supported project samples configure
+        if: matrix.java == 17
+        shell: bash
+        run: |
+          for sample in \
+            java \
+            java-library \
+            application \
+            kotlin-jvm \
+            android-application \
+            android-library \
+            kotlin-android-application \
+            kotlin-multiplatform
+          do
+            bash ./gradlew -p "samples/${sample}" help --stacktrace
+          done
+
+  desktop-native:
+    name: ${{ matrix.name }} Native runtime
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            gradle: bash ./gradlew
+          - name: Windows x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            gradle: .\gradlew.bat
+          - name: macOS x64
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+            gradle: bash ./gradlew
+          - name: macOS arm64
+            os: macos-15
+            target: aarch64-apple-darwin
+            gradle: bash ./gradlew
+    env:
+      STRGUARD_TARGET_TRIPLE: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+      - uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6
+      - name: Compile and load the host JNI runtime
+        run: >-
+          ${{ matrix.gradle }} :strguard-plugin:test
+          --tests "io.github.weg2022.strguard.StrGuardPluginFunctionalTest.transforms Java constants and Java 9 string concatenation"
+          --stacktrace
+
+  android-native:
+    name: Android arm64-v8a packaging
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      ANDROID_NDK_VERSION: 27.0.12077973
+      STRGUARD_ANDROID_NATIVE_TEST: "true"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+      - name: Install Android SDK and NDK
+        run: sdkmanager "platforms;android-34" "build-tools;34.0.0" "ndk;${ANDROID_NDK_VERSION}"
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+          targets: aarch64-linux-android
+      - uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6
+      - name: Run Android configuration and packaging tests
+        run: >-
+          bash ./gradlew :strguard-plugin:test
+          --tests "io.github.weg2022.strguard.*Android*Test"
+          --stacktrace

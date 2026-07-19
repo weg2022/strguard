@@ -11,6 +11,7 @@ class NativeTargetTest {
                 "x86_64-unknown-linux-gnu" to Triple("linux-x86_64", "libsg_fixture.so", "libstrguard_native.so"),
                 "x86_64-apple-darwin" to Triple("macos-x86_64", "libsg_fixture.dylib", "libstrguard_native.dylib"),
                 "aarch64-apple-darwin" to Triple("macos-arm64", "libsg_fixture.dylib", "libstrguard_native.dylib"),
+                "aarch64-linux-android" to Triple("arm64-v8a", "libsg_fixture.so", "libstrguard_native.so"),
             )
 
         expectations.forEach { (triple, expected) ->
@@ -33,7 +34,7 @@ class NativeTargetTest {
     fun `rejects unsupported target and host`() {
         val targetFailure =
             assertFailsWith<IllegalArgumentException> {
-                NativeTarget.fromRustTriple("aarch64-linux-android")
+                NativeTarget.fromRustTriple("riscv64-unknown-linux-gnu")
             }
         assertTrue(targetFailure.message.orEmpty().contains("Supported targets"))
 

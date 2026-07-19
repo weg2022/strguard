@@ -1,11 +1,12 @@
 package io.github.weg2022.strguard
 
-import javax.inject.Inject
 import org.gradle.api.model.ObjectFactory
 import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
+import javax.inject.Inject
 
 abstract class StrGuardExtension @Inject constructor(objects: ObjectFactory) {
+    /** Disables all StrGuard class rewriting, metadata removal, and Native runtime generation. */
     val enabled: Property<Boolean> = objects.property(Boolean::class.java).convention(true)
 
     /** 256-bit release seed encoded as exactly 64 hexadecimal characters. */

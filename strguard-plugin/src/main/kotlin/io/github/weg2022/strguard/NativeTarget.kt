@@ -8,6 +8,7 @@ internal enum class NativeTarget(
     private val libraryPrefix: String,
     val libraryExtension: String,
     val cargoLibraryFileName: String,
+    val extractFromResources: Boolean,
 ) {
     WINDOWS_X64(
         rustTriple = "x86_64-pc-windows-msvc",
@@ -15,6 +16,7 @@ internal enum class NativeTarget(
         libraryPrefix = "",
         libraryExtension = ".dll",
         cargoLibraryFileName = "strguard_native.dll",
+        extractFromResources = true,
     ),
     LINUX_X64(
         rustTriple = "x86_64-unknown-linux-gnu",
@@ -22,6 +24,7 @@ internal enum class NativeTarget(
         libraryPrefix = "lib",
         libraryExtension = ".so",
         cargoLibraryFileName = "libstrguard_native.so",
+        extractFromResources = true,
     ),
     MACOS_X64(
         rustTriple = "x86_64-apple-darwin",
@@ -29,6 +32,7 @@ internal enum class NativeTarget(
         libraryPrefix = "lib",
         libraryExtension = ".dylib",
         cargoLibraryFileName = "libstrguard_native.dylib",
+        extractFromResources = true,
     ),
     MACOS_ARM64(
         rustTriple = "aarch64-apple-darwin",
@@ -36,11 +40,29 @@ internal enum class NativeTarget(
         libraryPrefix = "lib",
         libraryExtension = ".dylib",
         cargoLibraryFileName = "libstrguard_native.dylib",
+        extractFromResources = true,
+    ),
+    ANDROID_ARM64(
+        rustTriple = "aarch64-linux-android",
+        resourceDirectory = "arm64-v8a",
+        libraryPrefix = "lib",
+        libraryExtension = ".so",
+        cargoLibraryFileName = "libstrguard_native.so",
+        extractFromResources = false,
     ),
     ;
 
     fun packagedLibraryFileName(suffix: String): String =
         "${libraryPrefix}sg_$suffix$libraryExtension"
+
+    fun packagedResourcePath(fileName: String): String =
+        if (extractFromResources) {
+            "META-INF/strguard/native/$resourceDirectory/$fileName"
+        } else {
+            "$resourceDirectory/$fileName"
+        }
+
+    fun libraryLoadName(suffix: String): String = "sg_$suffix"
 
     companion object {
         fun fromRustTriple(value: String): NativeTarget {

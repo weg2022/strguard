@@ -1,0 +1,42 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  github-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Validate the release tag
+        shell: bash
+        run: |
+          semver='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+          if [[ ! "${GITHUB_REF_NAME}" =~ ${semver} ]]; then
+            echo "Release tag must use v<semver> syntax" >&2
+            exit 1
+          fi
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          release_args=(--verify-tag --generate-notes --title "StrGuard ${GITHUB_REF_NAME#v}")
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+            release_args+=(--prerelease)
+          fi
+
+          gh release create "${GITHUB_REF_NAME}" "${release_args[@]}"

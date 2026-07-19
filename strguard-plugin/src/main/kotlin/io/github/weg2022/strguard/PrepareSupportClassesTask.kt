@@ -1,11 +1,9 @@
 package io.github.weg2022.strguard
 
-import java.nio.file.Files
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.DirectoryProperty
-import org.gradle.api.tasks.CacheableTask
-import org.gradle.api.tasks.OutputDirectory
-import org.gradle.api.tasks.TaskAction
+import org.gradle.api.tasks.*
+import java.nio.file.Files
 
 @CacheableTask
 abstract class PrepareSupportClassesTask : DefaultTask() {
@@ -18,5 +16,11 @@ abstract class PrepareSupportClassesTask : DefaultTask() {
         destination.toFile().deleteRecursively()
         Files.createDirectories(destination)
         SupportClassFiles.writeAnnotations(destination)
+        Files.writeString(
+            destination.resolve(ANDROID_PROGUARD_RULES_FILE_NAME),
+            "-keep class io.github.weg2022.strguard.generated.B* { *; }\n",
+        )
     }
 }
+
+internal const val ANDROID_PROGUARD_RULES_FILE_NAME = "strguard-android-rules.pro"

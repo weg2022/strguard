@@ -163,7 +163,7 @@ private fun plaintextClass(plaintext: String): ByteArray {
 
 private fun newClassWriter(): ClassWriter =
     ClassWriter(ClassWriter.COMPUTE_MAXS).apply {
-        visit(Opcodes.V17, Opcodes.ACC_PUBLIC, "sample/Secrets", null, "java/lang/Object", null)
+        visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, "sample/Secrets", null, "java/lang/Object", null)
     }
 
 private fun pushByteArray(method: MethodVisitor, bytes: ByteArray) {

@@ -2,7 +2,7 @@ use chacha20poly1305::aead::{Aead, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit, Nonce};
 use hkdf::Hkdf;
 use jni::objects::JClass;
-use jni::sys::{jint, jlong, jstring, JNI_VERSION_1_8};
+use jni::sys::{jint, jlong, jstring, JNI_VERSION_1_6};
 use jni::{JNIEnv, JavaVM, NativeMethod};
 use sha2::Sha256;
 use std::ffi::c_void;
@@ -70,7 +70,7 @@ pub extern "system" fn JNI_OnLoad(vm: JavaVM, _reserved: *mut c_void) -> jint {
     if env.register_native_methods(class, &methods).is_err() {
         return jni::sys::JNI_ERR;
     }
-    JNI_VERSION_1_8
+    JNI_VERSION_1_6
 }
 
 macro_rules! gateway {

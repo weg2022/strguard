@@ -23,9 +23,10 @@ internal object SupportClassFiles {
         }
     }
 
-    fun writeRuntimeAndAnnotations(destination: Path, bridge: BridgeModel) {
-        writeAnnotations(destination)
-        copyClassFile(NativeLibraryLoader::class.java, destination)
+    fun writeRuntime(destination: Path, bridge: BridgeModel) {
+        if (bridge.extractFromResources) {
+            copyClassFile(NativeLibraryLoader::class.java, destination)
+        }
         writeBridge(destination, bridge)
     }
 
@@ -47,23 +48,34 @@ internal object SupportClassFiles {
         )
         writer.visitMethod(Opcodes.ACC_STATIC, "<clinit>", "()V", null, null).apply {
             visitCode()
-            visitLdcInsn(Type.getObjectType(bridge.internalClassName))
-            visitLdcInsn(bridge.nativeLibraryResourcePath)
-            visitLdcInsn(bridge.nativeLibraryFileName)
-            visitMethodInsn(
-                Opcodes.INVOKESTATIC,
-                NATIVE_LOADER_INTERNAL_NAME,
-                "extract",
-                "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
-                false,
-            )
-            visitMethodInsn(
-                Opcodes.INVOKESTATIC,
-                "java/lang/System",
-                "load",
-                "(Ljava/lang/String;)V",
-                false,
-            )
+            if (bridge.extractFromResources) {
+                visitLdcInsn(Type.getObjectType(bridge.internalClassName))
+                visitLdcInsn(bridge.nativeLibraryResourcePath)
+                visitLdcInsn(bridge.nativeLibraryFileName)
+                visitMethodInsn(
+                    Opcodes.INVOKESTATIC,
+                    NATIVE_LOADER_INTERNAL_NAME,
+                    "extract",
+                    "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+                    false,
+                )
+                visitMethodInsn(
+                    Opcodes.INVOKESTATIC,
+                    "java/lang/System",
+                    "load",
+                    "(Ljava/lang/String;)V",
+                    false,
+                )
+            } else {
+                visitLdcInsn(bridge.nativeLibraryLoadName)
+                visitMethodInsn(
+                    Opcodes.INVOKESTATIC,
+                    "java/lang/System",
+                    "loadLibrary",
+                    "(Ljava/lang/String;)V",
+                    false,
+                )
+            }
             visitInsn(Opcodes.RETURN)
             visitMaxs(0, 0)
             visitEnd()

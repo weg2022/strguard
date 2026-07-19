@@ -179,9 +179,10 @@ internal class SecureVaultBuilder(
         return BridgeModel(
             internalClassName = "io/github/weg2022/strguard/generated/B$classSuffix",
             methodNames = methodNames,
-            nativeLibraryResourcePath =
-                "META-INF/strguard/native/${nativeTarget.resourceDirectory}/$fileName",
+            nativeLibraryResourcePath = nativeTarget.packagedResourcePath(fileName),
             nativeLibraryFileName = fileName,
+            nativeLibraryLoadName = nativeTarget.libraryLoadName(librarySuffix),
+            extractFromResources = nativeTarget.extractFromResources,
         )
     }
 

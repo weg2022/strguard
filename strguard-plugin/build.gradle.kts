@@ -1,36 +1,36 @@
-import org.gradle.api.publish.maven.MavenPublication
-import org.gradle.api.tasks.testing.Test
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
 plugins {
     kotlin("jvm") version "2.1.21"
     `java-gradle-plugin`
     `maven-publish`
-    signing
+    id("com.gradle.plugin-publish") version "2.1.1"
 }
 
 group = "io.github.weg2022"
-version = "2.0.0-SNAPSHOT"
+version = providers.gradleProperty("strguardVersion").getOrElse("2.0.0-SNAPSHOT")
+
+val androidGradlePluginVersion = "8.13.2"
+val kotlinGradlePluginVersion = "2.1.21"
 
 repositories {
+    google()
     mavenCentral()
 }
 
 java {
-    toolchain {
-        languageVersion.set(JavaLanguageVersion.of(17))
-    }
+    sourceCompatibility = JavaVersion.VERSION_11
+    targetCompatibility = JavaVersion.VERSION_11
     withSourcesJar()
-}
-
-kotlin {
-    jvmToolchain(17)
 }
 
 dependencies {
     implementation(gradleApi())
     implementation("org.ow2.asm:asm:9.8")
     implementation("org.ow2.asm:asm-commons:9.8")
+    compileOnly("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinGradlePluginVersion")
+    compileOnly("com.android.tools.build:gradle-api:$androidGradlePluginVersion")
 
     testImplementation(gradleTestKit())
     testImplementation(kotlin("test"))
@@ -38,11 +38,16 @@ dependencies {
 }
 
 tasks.withType<KotlinCompile>().configureEach {
+    compilerOptions.jvmTarget.set(JvmTarget.JVM_11)
     compilerOptions.freeCompilerArgs.addAll(
         "-Xno-param-assertions",
         "-Xno-call-assertions",
         "-Xno-receiver-assertions",
     )
+}
+
+tasks.withType<JavaCompile>().configureEach {
+    options.release.set(11)
 }
 
 tasks.withType<Test>().configureEach {
@@ -64,8 +69,8 @@ gradlePlugin {
             id = "io.github.weg2022.strguard"
             implementationClass = "io.github.weg2022.strguard.StrGuardPlugin"
             displayName = "StrGuard Gradle Plugin"
-            description = "Gradle plugin for JVM string obfuscation"
-            tags.set(listOf("jvm", "asm", "obfuscation", "strings"))
+            description = "Native-backed string protection for JVM and Android builds"
+            tags.set(listOf("jvm", "android", "native", "obfuscation", "strings"))
         }
     }
 }
@@ -74,7 +79,7 @@ publishing {
     publications.withType<MavenPublication>().configureEach {
         pom {
             name.set("StrGuard Gradle Plugin")
-            description.set("Gradle plugin for JVM string obfuscation")
+            description.set("Native-backed string protection for JVM and Android builds")
             url.set("https://github.com/weg2022/strguard")
 
             licenses {
@@ -96,24 +101,5 @@ publishing {
                 url.set("https://github.com/weg2022/strguard")
             }
         }
-    }
-    repositories {
-        maven {
-            name = "sonatype"
-            url = uri("https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/")
-            credentials {
-                username = providers.gradleProperty("ossrhUsername").orNull
-                password = providers.gradleProperty("ossrhPassword").orNull
-            }
-        }
-    }
-}
-
-signing {
-    val signingKey = providers.gradleProperty("signingKey").orNull
-    val signingPassword = providers.gradleProperty("signingPassword").orNull
-    if (!signingKey.isNullOrBlank()) {
-        useInMemoryPgpKeys(signingKey, signingPassword)
-        sign(publishing.publications)
     }
 }

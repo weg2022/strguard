@@ -2,27 +2,21 @@ package io.github.weg2022.strguard
 
 import io.github.weg2022.strguard.crypto.CryptoPrimitives
 import io.github.weg2022.strguard.vault.SecureVaultBuilder
-import java.nio.charset.StandardCharsets
-import java.nio.file.Files
-import java.nio.file.Path
-import java.security.MessageDigest
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
 import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
-import org.gradle.api.tasks.CacheableTask
-import org.gradle.api.tasks.Input
-import org.gradle.api.tasks.InputFiles
-import org.gradle.api.tasks.Internal
-import org.gradle.api.tasks.OutputDirectory
-import org.gradle.api.tasks.PathSensitive
-import org.gradle.api.tasks.PathSensitivity
-import org.gradle.api.tasks.TaskAction
+import org.gradle.api.tasks.*
+import org.gradle.work.DisableCachingByDefault
 import org.objectweb.asm.ClassReader
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Path
+import java.security.MessageDigest
 
-@CacheableTask
+@DisableCachingByDefault(because = "Outputs contain build-specific seed-derived Native key material")
 abstract class TransformClassesTask : DefaultTask() {
     @get:InputFiles
     @get:PathSensitive(PathSensitivity.RELATIVE)
@@ -86,17 +80,23 @@ abstract class TransformClassesTask : DefaultTask() {
                 keepMetadataPackages = keepMetadataPackages.get(),
             )
         val sources = collectInputFiles()
-        val inputDigest = digestInputs(sources)
-        val seed = validatedSeed(settings.enabled)
-        val nativeTarget = NativeTarget.fromRustTriple(targetTriple.get())
-        val vaultBuilder = SecureVaultBuilder(seed, moduleIdentity.get(), inputDigest, nativeTarget)
-
         val destination = outputDirectory.get().asFile.toPath()
         val nativeInputs = nativeInputDirectory.get().asFile.toPath()
         val reports = reportDirectory.get().asFile.toPath()
         resetDirectory(destination)
         resetDirectory(nativeInputs)
         resetDirectory(reports)
+        if (!settings.enabled) {
+            copyUnchanged(sources, destination)
+            writeReport(reports, protectedStrings = 0, removedMetadata = 0)
+            logSummary(protectedStrings = 0, removedMetadata = 0)
+            return
+        }
+
+        val inputDigest = digestInputs(sources)
+        val seed = validatedSeed()
+        val nativeTarget = NativeTarget.fromRustTriple(targetTriple.get())
+        val vaultBuilder = SecureVaultBuilder(seed, moduleIdentity.get(), inputDigest, nativeTarget)
 
         val metadataMappings = linkedSetOf<String>()
         sources.forEach { source ->
@@ -117,29 +117,38 @@ abstract class TransformClassesTask : DefaultTask() {
             }
         }
 
-        if (settings.enabled) {
-            SupportClassFiles.writeRuntimeAndAnnotations(destination, vaultBuilder.bridge)
-            vaultBuilder.writeNativeInputs(nativeInputs)
+        SupportClassFiles.writeRuntime(destination, vaultBuilder.bridge)
+        vaultBuilder.writeNativeInputs(nativeInputs)
+        writeReport(reports, vaultBuilder.protectedStringCount, metadataMappings.size)
+        logSummary(vaultBuilder.protectedStringCount, metadataMappings.size)
+    }
+
+    private fun copyUnchanged(sources: List<InputFile>, destination: Path) {
+        sources.forEach { source ->
+            val target = destination.resolve(source.relativePath)
+            Files.createDirectories(target.parent)
+            Files.copy(source.source, target)
         }
+    }
+
+    private fun writeReport(reports: Path, protectedStrings: Int, removedMetadata: Int) {
         Files.writeString(
             reports.resolve("summary.txt"),
-            "protectedStrings=${vaultBuilder.protectedStringCount}\n" +
-                "removedMetadata=${metadataMappings.size}\n",
+            "protectedStrings=$protectedStrings\nremovedMetadata=$removedMetadata\n",
             StandardCharsets.UTF_8,
         )
+    }
 
+    private fun logSummary(protectedStrings: Int, removedMetadata: Int) {
         if (consoleOutput.get()) {
             logger.lifecycle(
-                "StrGuard 2 protected ${vaultBuilder.protectedStringCount} call sites and removed " +
-                    "${metadataMappings.size} metadata annotations",
+                "StrGuard 2 protected $protectedStrings call sites and removed " +
+                        "$removedMetadata metadata annotations",
             )
         }
     }
 
-    private fun validatedSeed(enabled: Boolean): String {
-        if (!enabled) {
-            return DISABLED_SEED
-        }
+    private fun validatedSeed(): String {
         val seed = releaseSeedHex.orNull
             ?: throw GradleException(
                 "StrGuard 2 requires strGuard.releaseSeedHex or STRGUARD_RELEASE_SEED_HEX",
@@ -205,6 +214,3 @@ private data class InputFile(
     val relativePath: Path,
     val normalizedRelativePath: String,
 )
-
-private const val DISABLED_SEED =
-    "0000000000000000000000000000000000000000000000000000000000000000"

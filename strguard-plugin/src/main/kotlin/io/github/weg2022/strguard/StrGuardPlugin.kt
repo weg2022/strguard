@@ -1,6 +1,5 @@
 package io.github.weg2022.strguard
 
-import io.github.weg2022.strguard.crypto.CryptoPrimitives
 import org.gradle.api.*
 import org.gradle.api.plugins.JavaPlugin
 import org.gradle.api.plugins.JavaPluginExtension
@@ -38,17 +37,14 @@ class StrGuardPlugin : Plugin<Project> {
             configureJvmProject(project, extension, supportClasses)
         }
 
-        listOf(
-            "com.android.application",
-            "com.android.library",
-            "org.jetbrains.kotlin.multiplatform",
-        ).forEach { unsupportedPlugin ->
-            project.pluginManager.withPlugin(unsupportedPlugin) {
-                throw GradleException(
-                    "StrGuard currently supports Java and Kotlin/JVM modules only; " +
-                            "use the platform instrumentation API for $unsupportedPlugin.",
-                )
-            }
+        project.pluginManager.withPlugin("com.android.application") {
+            AndroidAdapter.configureApplication(project, extension, supportClasses)
+        }
+        project.pluginManager.withPlugin("com.android.library") {
+            AndroidAdapter.configureLibrary(project, extension, supportClasses)
+        }
+        project.pluginManager.withPlugin("org.jetbrains.kotlin.multiplatform") {
+            KotlinMultiplatformAdapter.configure(project, extension, supportClasses)
         }
     }
 
@@ -85,15 +81,7 @@ class StrGuardPlugin : Plugin<Project> {
             task.reportDirectory.convention(project.layout.buildDirectory.dir("reports/strguard/main"))
             task.stringGuardEnabled.convention(extension.enabled)
             task.releaseSeedHex.convention(extension.releaseSeedHex)
-            task.releaseSeedFingerprint.convention(
-                extension.releaseSeedHex
-                    .map { seed ->
-                        CryptoPrimitives.hex(
-                            CryptoPrimitives.sha256(CryptoPrimitives.parseHex256(seed)),
-                        )
-                    }
-                    .orElse("missing"),
-            )
+            task.releaseSeedFingerprint.convention(project.releaseSeedFingerprint(extension))
             task.moduleIdentity.convention("${project.group}:${project.name}:${project.path}")
             task.targetTriple.convention(extension.targetTriple)
             task.java9StringConcatEnabled.convention(extension.java9StringConcatEnabled)

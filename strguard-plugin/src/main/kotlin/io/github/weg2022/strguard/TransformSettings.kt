@@ -14,15 +14,16 @@ internal data class TransformSettings(
 
     fun shouldTransformStrings(internalClassName: String): Boolean =
         enabled &&
-            !isSupportClass(internalClassName) &&
-            matchesIncludedPackages(internalClassName, stringGuardPackages) &&
-            !matchesAnyPackage(internalClassName, keepStringPackages)
+                !isSupportClass(internalClassName) &&
+                matchesIncludedPackages(internalClassName, stringGuardPackages) &&
+                !matchesAnyPackage(internalClassName, keepStringPackages)
 
     fun shouldRemoveMetadata(internalClassName: String): Boolean =
-        removeMetadata &&
-            !isSupportClass(internalClassName) &&
-            matchesIncludedPackages(internalClassName, removeMetadataPackages) &&
-            !matchesAnyPackage(internalClassName, keepMetadataPackages)
+        enabled &&
+                removeMetadata &&
+                !isSupportClass(internalClassName) &&
+                matchesIncludedPackages(internalClassName, removeMetadataPackages) &&
+                !matchesAnyPackage(internalClassName, keepMetadataPackages)
 
     private fun isSupportClass(internalClassName: String): Boolean =
         internalClassName.startsWith("io/github/weg2022/strguard/")
@@ -34,6 +35,6 @@ internal data class TransformSettings(
         packageNames.any { packageName ->
             val normalizedName = packageName.trim().replace('.', '/').trim('/')
             normalizedName.isNotEmpty() &&
-                (internalClassName == normalizedName || internalClassName.startsWith("$normalizedName/"))
+                    (internalClassName == normalizedName || internalClassName.startsWith("$normalizedName/"))
         }
 }
