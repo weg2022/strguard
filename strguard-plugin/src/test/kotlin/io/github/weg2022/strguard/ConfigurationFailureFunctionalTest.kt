@@ -5,8 +5,8 @@ import org.junit.jupiter.api.io.TempDir
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
-import kotlin.test.Test
-import kotlin.test.assertTrue
+import java.util.Properties
+import kotlin.test.*
 
 class ConfigurationFailureFunctionalTest {
     @TempDir
@@ -45,9 +45,110 @@ class ConfigurationFailureFunctionalTest {
 
         val result = runner().buildAndFail()
 
-        assertTrue(result.output.contains("Unsupported StrGuard Native target 'not-a-rust-target'"))
+        assertTrue(result.output.contains("Unsupported StrGuard JVM Native target 'not-a-rust-target'"))
         assertTrue(result.output.contains("x86_64-pc-windows-msvc"))
-        assertTrue(result.output.contains("aarch64-linux-android"))
+        assertTrue(result.output.contains("aarch64-pc-windows-msvc"))
+    }
+
+    @Test
+    fun `illegal package selector reports the property and value`() {
+        writeProject(
+            """
+            releaseSeedHex.set("$CONFIGURATION_FAILURE_TEST_SEED")
+            stringGuardPackages.set(listOf("sample..internal"))
+            """.trimIndent(),
+        )
+
+        val result = runner().buildAndFail()
+
+        assertTrue(result.output.contains("stringGuardPackages"))
+        assertTrue(result.output.contains("sample..internal"))
+        assertTrue(result.output.contains("legal package segment"))
+    }
+
+    @Test
+    fun `explicit include that matches no eligible class fails closed`() {
+        writeProject(
+            """
+            releaseSeedHex.set("$CONFIGURATION_FAILURE_TEST_SEED")
+            stringGuardPackages.set(listOf("missing.package"))
+            """.trimIndent(),
+        )
+
+        val result = runner().buildAndFail()
+
+        assertTrue(
+            result.output.contains(
+                "stringGuardPackages selector 'missing/package' did not match any eligible class",
+            ),
+        )
+    }
+
+    @Test
+    fun `explicit include matching a class with no string literal succeeds`() {
+        writeProject(
+            """
+            releaseSeedHex.set("$CONFIGURATION_FAILURE_TEST_SEED")
+            stringGuardPackages.set(listOf("sample.empty"))
+            removeMetadata.set(true)
+            removeMetadataPackages.set(listOf("sample.empty"))
+            """.trimIndent(),
+        )
+        writeFile(
+            "src/main/java/sample/empty/NoLiteral.java",
+            """
+            package sample.empty;
+
+            public final class NoLiteral {
+                public static int value() {
+                    return 42;
+                }
+            }
+            """.trimIndent(),
+        )
+
+        runner().build()
+
+        val summary = readSummary()
+        assertEquals("2", summary.getProperty("inputClasses"))
+        assertEquals("2", summary.getProperty("eligibleClasses"))
+        assertEquals("1", summary.getProperty("matchedClasses"))
+        assertEquals("1", summary.getProperty("skippedClasses"))
+        assertEquals("0", summary.getProperty("protectedStrings"))
+        assertEquals("0", summary.getProperty("removedMetadata"))
+    }
+
+    @Test
+    fun `unmatched keep selector is warned and recorded`() {
+        writeProject(
+            """
+            releaseSeedHex.set("$CONFIGURATION_FAILURE_TEST_SEED")
+            keepStringPackages.set(listOf("missing.keep"))
+            removeMetadata.set(true)
+            keepMetadataPackages.set(listOf("missing.metadata"))
+            """.trimIndent(),
+        )
+
+        val result = runner().build()
+
+        assertTrue(
+            result.output.contains(
+                "keepStringPackages selector 'missing/keep' did not match any eligible class",
+            ),
+        )
+        assertTrue(
+            result.output.contains(
+                "keepMetadataPackages selector 'missing/metadata' did not match any eligible class",
+            ),
+        )
+        assertEquals(
+            "missing/keep",
+            readSummary().getProperty("unmatchedKeepStringPackages"),
+        )
+        assertEquals(
+            "missing/metadata",
+            readSummary().getProperty("unmatchedKeepMetadataPackages"),
+        )
     }
 
     private fun writeProject(strGuardConfiguration: String) {
@@ -79,12 +180,18 @@ class ConfigurationFailureFunctionalTest {
         )
     }
 
-    private fun runner(): GradleRunner =
-        GradleRunner.create()
-            .withProjectDir(projectDirectory.toFile())
-            .withPluginClasspath()
-            .withArguments("transformStrGuardMain", "--stacktrace")
-            .forwardOutput()
+    private fun runner(): GradleRunner = GradleRunner.create()
+        .withProjectDir(projectDirectory.toFile())
+        .withPluginClasspath()
+        .withArguments("transformStrGuardMain", "--stacktrace")
+        .forwardOutput()
+
+    private fun readSummary(): Properties = Properties().apply {
+        Files.newBufferedReader(
+            projectDirectory.resolve("build/reports/strguard/main/summary.txt"),
+            StandardCharsets.UTF_8,
+        ).use(::load)
+    }
 
     private fun writeFile(relativePath: String, contents: String) {
         val file = projectDirectory.resolve(relativePath)

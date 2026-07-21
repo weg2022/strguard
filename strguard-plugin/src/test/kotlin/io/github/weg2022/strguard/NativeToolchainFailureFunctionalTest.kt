@@ -43,6 +43,7 @@ class NativeToolchainFailureFunctionalTest {
         )
         val emptyPath = Files.createDirectories(projectDirectory.resolve("empty-path")).toString()
         val environment = System.getenv().toMutableMap()
+        environment.remove(CARGO_EXECUTABLE_ENVIRONMENT_VARIABLE)
         val pathKey = environment.keys.firstOrNull { it.equals("PATH", ignoreCase = true) } ?: "PATH"
         environment[pathKey] = emptyPath
 
@@ -66,8 +67,7 @@ class NativeToolchainFailureFunctionalTest {
         Files.writeString(file, contents, StandardCharsets.UTF_8)
     }
 
-    private fun hostNativeTarget(): NativeTarget =
-        NativeTarget.detectHost(System.getProperty("os.name"), System.getProperty("os.arch"))
+    private fun hostNativeTarget(): JvmNativeTarget = JvmNativeTarget.detectHost(System.getProperty("os.name"), System.getProperty("os.arch"))
 }
 
 private const val NATIVE_TOOLCHAIN_TEST_SEED =

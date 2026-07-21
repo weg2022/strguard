@@ -67,11 +67,17 @@ internal object CryptoPrimitives {
 
     fun utf8(value: String): ByteArray = value.toByteArray(StandardCharsets.UTF_8)
 
-    fun intLe(value: Int): ByteArray =
-        ByteBuffer.allocate(Int.SIZE_BYTES).order(ByteOrder.LITTLE_ENDIAN).putInt(value).array()
+    fun utf16Le(value: String): ByteArray = ByteArray(value.length * Char.SIZE_BYTES).also { output ->
+        value.forEachIndexed { index, character ->
+            val codeUnit = character.code
+            output[index * Char.SIZE_BYTES] = codeUnit.toByte()
+            output[index * Char.SIZE_BYTES + 1] = (codeUnit ushr Byte.SIZE_BITS).toByte()
+        }
+    }
 
-    fun longFromBigEndian(value: ByteArray, offset: Int): Long =
-        ByteBuffer.wrap(value, offset, Long.SIZE_BYTES).order(ByteOrder.BIG_ENDIAN).long
+    fun intLe(value: Int): ByteArray = ByteBuffer.allocate(Int.SIZE_BYTES).order(ByteOrder.LITTLE_ENDIAN).putInt(value).array()
+
+    fun longFromBigEndian(value: ByteArray, offset: Int): Long = ByteBuffer.wrap(value, offset, Long.SIZE_BYTES).order(ByteOrder.BIG_ENDIAN).long
 
     fun hex(value: ByteArray): String = value.joinToString(separator = "") { byte -> "%02x".format(byte) }
 

@@ -6,7 +6,7 @@ plugins {
 android {
     namespace = "sample.android.application"
     compileSdk = 34
-    ndkVersion = "27.0.12077973"
+    ndkVersion = "27.2.12479018"
 
     defaultConfig {
         applicationId = "sample.android.application"
@@ -24,5 +24,6 @@ android {
 }
 
 strGuard {
+    androidAbis.set(setOf("arm64-v8a"))
     stringGuardPackages.set(listOf("sample.android.application"))
 }

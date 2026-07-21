@@ -5,7 +5,13 @@ plugins {
     kotlin("jvm") version "2.1.21"
     `java-gradle-plugin`
     `maven-publish`
+    jacoco
     id("com.gradle.plugin-publish") version "2.1.1"
+    id("com.diffplug.spotless") version "8.7.0"
+}
+
+jacoco {
+    toolVersion = "0.8.13"
 }
 
 group = "io.github.weg2022"
@@ -13,10 +19,34 @@ version = providers.gradleProperty("strguardVersion").getOrElse("2.0.0-SNAPSHOT"
 
 val androidGradlePluginVersion = "8.13.2"
 val kotlinGradlePluginVersion = "2.1.21"
+val composeGradlePluginVersion = "1.8.2"
 
 repositories {
     google()
     mavenCentral()
+}
+
+spotless {
+    kotlin {
+        target("src/**/*.kt")
+        ktlint("1.8.0").editorConfigOverride(
+            mapOf(
+                "ktlint_code_style" to "intellij_idea",
+                "max_line_length" to "off",
+                "ktlint_standard_no-wildcard-imports" to "disabled",
+            ),
+        )
+    }
+    kotlinGradle {
+        target("*.gradle.kts")
+        ktlint("1.8.0").editorConfigOverride(
+            mapOf(
+                "ktlint_code_style" to "intellij_idea",
+                "max_line_length" to "off",
+                "ktlint_standard_no-wildcard-imports" to "disabled",
+            ),
+        )
+    }
 }
 
 java {
@@ -31,6 +61,7 @@ dependencies {
     implementation("org.ow2.asm:asm-commons:9.8")
     compileOnly("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinGradlePluginVersion")
     compileOnly("com.android.tools.build:gradle-api:$androidGradlePluginVersion")
+    compileOnly("org.jetbrains.compose:compose-gradle-plugin:$composeGradlePluginVersion")
 
     testImplementation(gradleTestKit())
     testImplementation(kotlin("test"))
@@ -43,6 +74,7 @@ tasks.withType<KotlinCompile>().configureEach {
         "-Xno-param-assertions",
         "-Xno-call-assertions",
         "-Xno-receiver-assertions",
+        "-Xjdk-release=11",
     )
 }
 
@@ -52,11 +84,49 @@ tasks.withType<JavaCompile>().configureEach {
 
 tasks.withType<Test>().configureEach {
     useJUnitPlatform()
+    finalizedBy(tasks.jacocoTestReport)
+}
+
+tasks.jacocoTestReport {
+    dependsOn(tasks.test)
+    reports {
+        xml.required.set(true)
+        html.required.set(true)
+        csv.required.set(false)
+    }
+}
+
+tasks.jacocoTestCoverageVerification {
+    dependsOn(tasks.test)
+    violationRules {
+        rule {
+            limit {
+                counter = "LINE"
+                value = "COVEREDRATIO"
+                minimum = "0.29".toBigDecimal()
+            }
+        }
+        rule {
+            includes = listOf(
+                "io.github.weg2022.strguard.vault.*",
+                "io.github.weg2022.strguard.crypto.*",
+            )
+            limit {
+                counter = "LINE"
+                value = "COVEREDRATIO"
+                minimum = "0.95".toBigDecimal()
+            }
+        }
+    }
+}
+
+tasks.check {
+    dependsOn(tasks.jacocoTestCoverageVerification)
 }
 
 tasks.withType<ProcessResources>().configureEach {
     from(rootProject.layout.projectDirectory.dir("native/strguard-runtime")) {
-        include("Cargo.toml", "Cargo.lock", "src/**")
+        include("Cargo.toml", "Cargo.lock", "build.rs", "src/**", "vendor.zip")
         into("strguard-native-runtime")
     }
 }

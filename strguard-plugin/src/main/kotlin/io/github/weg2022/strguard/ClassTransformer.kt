@@ -381,17 +381,16 @@ private class StringObfuscationClassVisitor(
             super.visitInsn(Opcodes.POP)
         }
 
-        private fun appendDescriptor(type: Type): String =
-            when (type.sort) {
-                Type.BOOLEAN -> "(Z)Ljava/lang/StringBuilder;"
-                Type.CHAR -> "(C)Ljava/lang/StringBuilder;"
-                Type.BYTE, Type.SHORT, Type.INT -> "(I)Ljava/lang/StringBuilder;"
-                Type.LONG -> "(J)Ljava/lang/StringBuilder;"
-                Type.FLOAT -> "(F)Ljava/lang/StringBuilder;"
-                Type.DOUBLE -> "(D)Ljava/lang/StringBuilder;"
-                Type.ARRAY, Type.OBJECT -> "(Ljava/lang/Object;)Ljava/lang/StringBuilder;"
-                else -> error("Unsupported string concat argument type $type")
-            }
+        private fun appendDescriptor(type: Type): String = when (type.sort) {
+            Type.BOOLEAN -> "(Z)Ljava/lang/StringBuilder;"
+            Type.CHAR -> "(C)Ljava/lang/StringBuilder;"
+            Type.BYTE, Type.SHORT, Type.INT -> "(I)Ljava/lang/StringBuilder;"
+            Type.LONG -> "(J)Ljava/lang/StringBuilder;"
+            Type.FLOAT -> "(F)Ljava/lang/StringBuilder;"
+            Type.DOUBLE -> "(D)Ljava/lang/StringBuilder;"
+            Type.ARRAY, Type.OBJECT -> "(Ljava/lang/Object;)Ljava/lang/StringBuilder;"
+            else -> error("Unsupported string concat argument type $type")
+        }
 
         private fun protectAndWrite(rawValue: String, kind: String): Boolean {
             val callSiteIdentity = "$className#$methodName$descriptor:$kind:${callSiteOrdinal++}"

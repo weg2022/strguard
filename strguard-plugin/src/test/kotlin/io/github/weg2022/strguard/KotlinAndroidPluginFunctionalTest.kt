@@ -17,8 +17,11 @@ class KotlinAndroidPluginFunctionalTest {
 
     @Test
     fun `protects Kotlin Android application classes`() {
+        val runtimeTestEnabled =
+            System.getenv("STRGUARD_ANDROID_RUNTIME_TEST").equals("true", ignoreCase = true)
         val nativeBuildEnabled =
-            System.getenv("STRGUARD_ANDROID_NATIVE_TEST").equals("true", ignoreCase = true)
+            runtimeTestEnabled ||
+                System.getenv("STRGUARD_ANDROID_NATIVE_TEST").equals("true", ignoreCase = true)
         val ndkVersion = System.getenv("ANDROID_NDK_VERSION")
         if (nativeBuildEnabled) {
             assumeTrue(!ndkVersion.isNullOrBlank(), "ANDROID_NDK_VERSION is required for Native integration testing")
@@ -45,6 +48,13 @@ class KotlinAndroidPluginFunctionalTest {
             "sdk.dir=${availableSdk.toString().replace("\\", "\\\\")}",
         )
         writeFile(
+            "gradle.properties",
+            buildString {
+                appendLine("android.useAndroidX=true")
+                if (nativeBuildEnabled) appendLine("android.builder.sdkDownload=true")
+            },
+        )
+        writeFile(
             "build.gradle.kts",
             """
             import org.jetbrains.kotlin.gradle.dsl.JvmTarget
@@ -68,6 +78,7 @@ class KotlinAndroidPluginFunctionalTest {
                 defaultConfig {
                     applicationId = "sample.android"
                     minSdk = 21
+                    testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
                 }
 
                 compileOptions {
@@ -78,6 +89,11 @@ class KotlinAndroidPluginFunctionalTest {
 
             kotlin {
                 compilerOptions.jvmTarget.set(JvmTarget.JVM_11)
+            }
+
+            dependencies {
+                androidTestImplementation("androidx.test.ext:junit:1.2.1")
+                androidTestImplementation("androidx.test:runner:1.6.2")
             }
 
             strGuard {
@@ -98,6 +114,12 @@ class KotlinAndroidPluginFunctionalTest {
 
             class KotlinAndroidExample {
                 fun reveal(value: String): String = "android-prefix-${'$'}value-sensitive-suffix"
+
+                fun identityFirst(): String = "android-shared-identity"
+
+                fun identitySecond(): String = "android-shared-identity"
+
+                fun specialUtf16(): String = "prefix\u0000\uD800middle\uDC00\uD83D\uDE00suffix"
             }
             """.trimIndent(),
         )
@@ -106,13 +128,38 @@ class KotlinAndroidPluginFunctionalTest {
             """
             package sample.android
 
+            import android.os.Build
+            import androidx.test.ext.junit.runners.AndroidJUnit4
+            import org.junit.Assert.assertArrayEquals
+            import org.junit.Assert.assertEquals
+            import org.junit.Assert.assertSame
+            import org.junit.Assert.assertTrue
+            import org.junit.Test
+            import org.junit.runner.RunWith
+
+            @RunWith(AndroidJUnit4::class)
             class InstrumentationProbe {
-                fun reveal(): String = KotlinAndroidExample().reveal("instrumentation")
+                @Test
+                fun protectedRuntimeLoadsOnArt() {
+                    val example = KotlinAndroidExample()
+                    assertTrue(Build.SUPPORTED_ABIS.isNotEmpty())
+                    assertEquals(
+                        "android-prefix-instrumentation-sensitive-suffix",
+                        example.reveal("instrumentation"),
+                    )
+                    assertSame(example.identityFirst(), example.identitySecond())
+                    assertArrayEquals(
+                        "prefix\u0000\uD800middle\uDC00\uD83D\uDE00suffix".toCharArray(),
+                        example.specialUtf16().toCharArray(),
+                    )
+                }
             }
             """.trimIndent(),
         )
 
-        val result = if (nativeBuildEnabled) {
+        val result = if (runtimeTestEnabled) {
+            runner("connectedDebugAndroidTest").build()
+        } else if (nativeBuildEnabled) {
             runner("assembleDebug", "assembleDebugAndroidTest").build()
         } else {
             runner("transformStrGuardDebugClasses").build()
@@ -137,47 +184,70 @@ class KotlinAndroidPluginFunctionalTest {
         )
         if (nativeBuildEnabled) {
             assertEquals(TaskOutcome.SUCCESS, result.task(":buildStrGuardDebugNative")?.outcome)
+            AndroidAbi.entries.forEach { abi ->
+                assertEquals(
+                    TaskOutcome.SUCCESS,
+                    result.task(":buildStrGuardDebug${abi.taskSuffix}Native")?.outcome,
+                )
+            }
             verifyNativeApk()
             verifyInstrumentationApk()
+            if (runtimeTestEnabled) {
+                assertEquals(TaskOutcome.SUCCESS, result.task(":connectedDebugAndroidTest")?.outcome)
+            }
         }
     }
 
-    private fun findTransformedJar(requiredEntry: String): Path =
-        Files.walk(projectDirectory.resolve("build")).use { paths ->
-            paths.filter { Files.isRegularFile(it) && it.fileName.toString().endsWith(".jar") }
-                .filter { candidate ->
-                    runCatching {
-                        JarFile(candidate.toFile()).use { jar -> jar.getJarEntry(requiredEntry) != null }
-                    }.getOrDefault(false)
-                }
-                .findFirst()
-                .orElseThrow { AssertionError("No transformed Android classes JAR contains $requiredEntry") }
-        }
+    private fun findTransformedJar(requiredEntry: String): Path = Files.walk(projectDirectory.resolve("build")).use { paths ->
+        paths.filter { Files.isRegularFile(it) && it.fileName.toString().endsWith(".jar") }
+            .filter { candidate ->
+                runCatching {
+                    JarFile(candidate.toFile()).use { jar -> jar.getJarEntry(requiredEntry) != null }
+                }.getOrDefault(false)
+            }
+            .findFirst()
+            .orElseThrow { AssertionError("No transformed Android classes JAR contains $requiredEntry") }
+    }
 
     private fun verifyNativeApk() {
         val apk = Files.walk(projectDirectory.resolve("build/outputs/apk")).use { paths ->
-            paths.filter { Files.isRegularFile(it) && it.fileName.toString().endsWith(".apk") }
+            paths.filter {
+                Files.isRegularFile(it) &&
+                    it.fileName.toString().endsWith(".apk") &&
+                    !it.toString().replace('\\', '/').contains("/androidTest/")
+            }
                 .findFirst()
                 .orElseThrow { AssertionError("Android build did not produce an APK") }
         }
         ZipFile(apk.toFile()).use { archive ->
-            val nativeEntry = archive.entries().asSequence().singleOrNull {
-                it.name.startsWith("lib/arm64-v8a/libsg_") && it.name.endsWith(".so")
+            val nativeEntries =
+                archive.entries().asSequence().filter { entry ->
+                    AndroidAbi.entries.any { abi ->
+                        entry.name.startsWith("lib/${abi.abiName}/libsg_") && entry.name.endsWith(".so")
+                    }
+                }.toList()
+            assertEquals(AndroidAbi.entries.size, nativeEntries.size)
+            assertEquals(
+                AndroidAbi.entries.map(AndroidAbi::abiName).toSet(),
+                nativeEntries.map { entry -> entry.name.substringAfter("lib/").substringBefore('/') }.toSet(),
+            )
+            nativeEntries.forEach { nativeEntry ->
+                val nativeText =
+                    archive.getInputStream(nativeEntry).readBytes().toString(StandardCharsets.ISO_8859_1)
+                assertFalse(nativeText.contains("sensitive-suffix"))
+                assertFalse(nativeText.contains(KOTLIN_ANDROID_TEST_SEED))
             }
-            assertNotNull(nativeEntry, "APK does not contain the generated arm64-v8a StrGuard library")
-            val nativeText =
-                archive.getInputStream(nativeEntry).readBytes().toString(StandardCharsets.ISO_8859_1)
-            assertFalse(nativeText.contains("sensitive-suffix"))
-            assertFalse(nativeText.contains(KOTLIN_ANDROID_TEST_SEED))
 
             val dexEntries = archive.entries().asSequence().filter {
                 it.name.startsWith("classes") && it.name.endsWith(".dex")
             }.toList()
             assertTrue(dexEntries.isNotEmpty(), "APK does not contain DEX bytecode")
-            assertTrue(dexEntries.none { entry ->
-                archive.getInputStream(entry).readBytes().toString(StandardCharsets.ISO_8859_1)
-                    .contains("sensitive-suffix")
-            })
+            assertTrue(
+                dexEntries.none { entry ->
+                    archive.getInputStream(entry).readBytes().toString(StandardCharsets.ISO_8859_1)
+                        .contains("sensitive-suffix")
+                },
+            )
         }
     }
 
@@ -197,11 +267,10 @@ class KotlinAndroidPluginFunctionalTest {
         }
     }
 
-    private fun runner(vararg arguments: String): GradleRunner =
-        GradleRunner.create()
-            .withProjectDir(projectDirectory.toFile())
-            .withArguments(*arguments, "--stacktrace")
-            .forwardOutput()
+    private fun runner(vararg arguments: String): GradleRunner = GradleRunner.create()
+        .withProjectDir(projectDirectory.toFile())
+        .withArguments(*arguments, "--stacktrace")
+        .forwardOutput()
 
     private fun writeFile(relativePath: String, contents: String) {
         val file = projectDirectory.resolve(relativePath)
@@ -209,8 +278,7 @@ class KotlinAndroidPluginFunctionalTest {
         Files.writeString(file, contents, StandardCharsets.UTF_8)
     }
 
-    private fun projectRootPath(): String =
-        Path.of(System.getProperty("user.dir")).toAbsolutePath().normalize().toString().replace("\\", "\\\\")
+    private fun projectRootPath(): String = Path.of(System.getProperty("user.dir")).toAbsolutePath().normalize().toString().replace("\\", "\\\\")
 }
 
 private fun findKotlinAndroidSdk(): Path? {

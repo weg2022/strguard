@@ -6,7 +6,7 @@ plugins {
 android {
     namespace = "sample.android.library"
     compileSdk = 34
-    ndkVersion = "27.0.12077973"
+    ndkVersion = "27.2.12479018"
 
     defaultConfig {
         minSdk = 21
@@ -20,5 +20,6 @@ android {
 }
 
 strGuard {
+    androidAbis.set(setOf("arm64-v8a"))
     stringGuardPackages.set(listOf("sample.android.library"))
 }

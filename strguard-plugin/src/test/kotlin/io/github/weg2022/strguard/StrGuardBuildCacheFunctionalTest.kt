@@ -38,6 +38,10 @@ class StrGuardBuildCacheFunctionalTest {
                 releaseSeedHex.set("$BUILD_CACHE_TEST_SEED")
                 stringGuardPackages.set(listOf("sample"))
             }
+
+            tasks.named("transformStrGuardMain") {
+                outputs.cacheIf { true }
+            }
             """.trimIndent(),
         )
         writeFile(
@@ -76,12 +80,11 @@ class StrGuardBuildCacheFunctionalTest {
         assertFalse(found, "Gradle Build Cache contains the release seed")
     }
 
-    private fun runner(vararg arguments: String): GradleRunner =
-        GradleRunner.create()
-            .withProjectDir(projectDirectory.toFile())
-            .withPluginClasspath()
-            .withArguments(*arguments, "--stacktrace")
-            .forwardOutput()
+    private fun runner(vararg arguments: String): GradleRunner = GradleRunner.create()
+        .withProjectDir(projectDirectory.toFile())
+        .withPluginClasspath()
+        .withArguments(*arguments, "--stacktrace")
+        .forwardOutput()
 
     private fun writeFile(relativePath: String, contents: String) {
         val file = projectDirectory.resolve(relativePath)

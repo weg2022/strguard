@@ -1,7 +1,6 @@
 buildscript {
     repositories {
         gradlePluginPortal()
-        mavenLocal()
         mavenCentral()
         google()
     }
@@ -9,9 +8,11 @@ buildscript {
 }
 allprojects {
     repositories {
-        mavenLocal()
         mavenCentral()
         google()
+    }
+    dependencyLocking {
+        lockAllConfigurations()
     }
 }
 

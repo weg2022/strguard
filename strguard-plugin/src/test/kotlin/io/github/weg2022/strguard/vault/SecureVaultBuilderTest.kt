@@ -1,7 +1,8 @@
 package io.github.weg2022.strguard.vault
 
-import io.github.weg2022.strguard.NativeTarget
+import io.github.weg2022.strguard.JvmNativeTarget
 import io.github.weg2022.strguard.crypto.CryptoPrimitives
+import org.junit.jupiter.api.io.TempDir
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.StandardCharsets
@@ -17,7 +18,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
-import org.junit.jupiter.api.io.TempDir
+import kotlin.test.assertTrue
 
 class SecureVaultBuilderTest {
     @TempDir
@@ -32,7 +33,7 @@ class SecureVaultBuilderTest {
             buildVault(
                 temporaryDirectory.resolve("linux"),
                 INPUT_DIGEST,
-                NativeTarget.LINUX_X64,
+                JvmNativeTarget.LINUX_GLIBC_X64,
             )
 
         assertContentEquals(first.vault, repeated.vault)
@@ -49,6 +50,8 @@ class SecureVaultBuilderTest {
         assertFalse(first.vault.asText().contains(TEST_RELEASE_SEED))
         assertFalse(first.nativeConfig.asText().contains(FIRST_SECRET))
         assertFalse(first.nativeConfig.asText().contains(TEST_RELEASE_SEED))
+        assertContentEquals(byteArrayOf('S'.code.toByte(), 'G'.code.toByte(), 'V'.code.toByte(), '3'.code.toByte()), first.vault.copyOfRange(0, 4))
+        assertEquals(3, first.vault[4].toInt() and 0xff)
 
         val contents = parseVault(first.vault)
         assertEquals(2, contents.records.size)
@@ -77,26 +80,77 @@ class SecureVaultBuilderTest {
                 first.model,
             )
         }
+        listOf(first, repeated, changed, linux).forEach { vault -> vault.model.close() }
+    }
+
+    @Test
+    fun `vault v3 preserves Java UTF-16 code units losslessly`() {
+        val secret = "prefix\u0000\uD800middle\uDC00\uD83D\uDE00suffix"
+        val builder = SecureVaultBuilder(TEST_RELEASE_SEED, MODULE_IDENTITY, INPUT_DIGEST, JvmNativeTarget.WINDOWS_X64)
+        val reference = requireNotNull(builder.protect(secret, "sample/Secrets#utf16()Ljava/lang/String;:ldc:0"))
+        val model = builder.writeNativeInputs(temporaryDirectory.resolve("utf16"))
+        val contents = parseVault(Files.readAllBytes(temporaryDirectory.resolve("utf16").resolve(VAULT_FILE_NAME)))
+        val record = contents.records.single { it.capability.contentEquals(reference.capabilityBytes()) }
+
+        assertEquals(secret.length, record.plaintextLength)
+        assertEquals(secret.length * 2 + AUTHENTICATION_TAG_SIZE, record.ciphertext.size)
+        assertContentEquals(secret.toCharArray(), decrypt(record, contents.buildId, model).toCharArray())
+        model.close()
+        builder.close()
+    }
+
+    @Test
+    fun `close clears builder and Native model key material`() {
+        val builder = SecureVaultBuilder(TEST_RELEASE_SEED, MODULE_IDENTITY, INPUT_DIGEST, JvmNativeTarget.WINDOWS_X64)
+        requireNotNull(builder.protect(FIRST_SECRET, "sample/Secrets#clear()Ljava/lang/String;:ldc:0"))
+        val model = builder.writeNativeInputs(temporaryDirectory.resolve("clear"))
+        val masterKey =
+            SecureVaultBuilder::class.java.getDeclaredField("masterKey").run {
+                isAccessible = true
+                get(builder) as ByteArray
+            }
+        val builderBuildId =
+            SecureVaultBuilder::class.java.getDeclaredField("buildId").run {
+                isAccessible = true
+                get(builder) as ByteArray
+            }
+        val modelBuildId = model.buildId
+        val shareBytes = model.keyShares.flatMap { share -> listOf(share.encoded, share.mask, share.order) }
+
+        builder.close()
+        model.close()
+
+        assertTrue(masterKey.all { byte -> byte == 0.toByte() })
+        assertTrue(builderBuildId.all { byte -> byte == 0.toByte() })
+        assertTrue(modelBuildId.all { byte -> byte == 0.toByte() })
+        assertTrue(shareBytes.all { bytes -> bytes.all { byte -> byte == 0.toByte() } })
+        assertFailsWith<IllegalStateException> {
+            builder.protect(FIRST_SECRET, "sample/Secrets#afterClose()Ljava/lang/String;:ldc:0")
+        }
     }
 
     private fun buildVault(
         directory: Path,
         inputDigest: ByteArray,
-        nativeTarget: NativeTarget = NativeTarget.WINDOWS_X64,
+        nativeTarget: JvmNativeTarget = JvmNativeTarget.WINDOWS_X64,
     ): BuiltVault {
         val builder = SecureVaultBuilder(TEST_RELEASE_SEED, MODULE_IDENTITY, inputDigest, nativeTarget)
-        val references =
-            listOf(
-                requireNotNull(builder.protect(FIRST_SECRET, "sample/Secrets#first()Ljava/lang/String;:ldc:0")),
-                requireNotNull(builder.protect(FIRST_SECRET, "sample/Secrets#second()Ljava/lang/String;:ldc:0")),
+        return try {
+            val references =
+                listOf(
+                    requireNotNull(builder.protect(FIRST_SECRET, "sample/Secrets#first()Ljava/lang/String;:ldc:0")),
+                    requireNotNull(builder.protect(FIRST_SECRET, "sample/Secrets#second()Ljava/lang/String;:ldc:0")),
+                )
+            val model = builder.writeNativeInputs(directory)
+            BuiltVault(
+                references = references,
+                model = model,
+                vault = Files.readAllBytes(directory.resolve(VAULT_FILE_NAME)),
+                nativeConfig = Files.readAllBytes(directory.resolve(RUST_CONFIG_FILE_NAME)),
             )
-        val model = builder.writeNativeInputs(directory)
-        return BuiltVault(
-            references = references,
-            model = model,
-            vault = Files.readAllBytes(directory.resolve(VAULT_FILE_NAME)),
-            nativeConfig = Files.readAllBytes(directory.resolve(RUST_CONFIG_FILE_NAME)),
-        )
+        } finally {
+            builder.close()
+        }
     }
 
     private fun parseVault(bytes: ByteArray): ParsedVault {
@@ -129,9 +183,11 @@ class SecureVaultBuilderTest {
             share.encoded.indices.forEach { encodedIndex ->
                 val targetIndex = share.order[encodedIndex].toInt() and 0xff
                 masterKey[targetIndex] =
-                    (masterKey[targetIndex].toInt() xor
+                    (
+                        masterKey[targetIndex].toInt() xor
                             share.encoded[encodedIndex].toInt() xor
-                            share.mask[encodedIndex].toInt()).toByte()
+                            share.mask[encodedIndex].toInt()
+                        ).toByte()
             }
         }
         val recordKey =
@@ -150,13 +206,23 @@ class SecureVaultBuilderTest {
             )
             cipher.updateAAD(
                 VAULT_MAGIC +
-                        byteArrayOf(VAULT_VERSION.toByte()) +
-                        buildId +
-                        record.capability +
-                        byteArrayOf(record.gatewayIndex.toByte()) +
-                        CryptoPrimitives.intLe(record.plaintextLength),
+                    byteArrayOf(VAULT_VERSION.toByte()) +
+                    buildId +
+                    record.capability +
+                    byteArrayOf(record.gatewayIndex.toByte()) +
+                    CryptoPrimitives.intLe(record.plaintextLength),
             )
-            cipher.doFinal(record.ciphertext).toString(StandardCharsets.UTF_8)
+            val plaintext = cipher.doFinal(record.ciphertext)
+            check(plaintext.size == record.plaintextLength * 2)
+            String(
+                CharArray(record.plaintextLength) { index ->
+                    val byteIndex = index * 2
+                    (
+                        (plaintext[byteIndex].toInt() and 0xff) or
+                            ((plaintext[byteIndex + 1].toInt() and 0xff) shl 8)
+                        ).toChar()
+                },
+            ).also { plaintext.fill(0) }
         } finally {
             masterKey.fill(0)
             recordKey.fill(0)
@@ -184,12 +250,11 @@ private class ParsedRecord(
     val ciphertext: ByteArray,
 )
 
-private fun VaultReference.capabilityBytes(): ByteArray =
-    ByteBuffer.allocate(CAPABILITY_SIZE)
-        .order(ByteOrder.BIG_ENDIAN)
-        .putLong(capabilityHigh)
-        .putLong(capabilityLow)
-        .array()
+private fun VaultReference.capabilityBytes(): ByteArray = ByteBuffer.allocate(CAPABILITY_SIZE)
+    .order(ByteOrder.BIG_ENDIAN)
+    .putLong(capabilityHigh)
+    .putLong(capabilityLow)
+    .array()
 
 private fun ByteArray.asText(): String = toString(StandardCharsets.ISO_8859_1)
 
@@ -201,6 +266,7 @@ private const val BUILD_ID_SIZE = 16
 private const val CAPABILITY_SIZE = 16
 private const val NONCE_SIZE = 12
 private const val KEY_SIZE = 32
+private const val AUTHENTICATION_TAG_SIZE = 16
 private val INPUT_DIGEST = CryptoPrimitives.sha256(CryptoPrimitives.utf8("fixture-input"))
 private val CHANGED_INPUT_DIGEST = CryptoPrimitives.sha256(CryptoPrimitives.utf8("changed-fixture-input"))
-private val RECORD_KEY_LABEL = CryptoPrimitives.utf8("strguard/v2/record-key")
+private val RECORD_KEY_LABEL = CryptoPrimitives.utf8("strguard/v3/record-key")

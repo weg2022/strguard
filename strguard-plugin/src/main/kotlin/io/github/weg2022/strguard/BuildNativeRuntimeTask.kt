@@ -6,8 +6,8 @@ import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.*
 import org.gradle.work.DisableCachingByDefault
-import java.io.IOException
 import java.nio.file.*
+import java.time.Duration
 import java.util.*
 
 @DisableCachingByDefault(because = "Native compiler reproducibility is validated separately per toolchain")
@@ -31,6 +31,19 @@ abstract class BuildNativeRuntimeTask : DefaultTask() {
     @get:Input
     abstract val runtimeTemplateVersion: Property<String>
 
+    @get:Input
+    abstract val processTimeoutSeconds: Property<Long>
+
+    @get:Input
+    abstract val toolchainFingerprint: Property<String>
+
+    @get:Internal
+    abstract val processRegistry: Property<NativeProcessRegistryService>
+
+    init {
+        outputs.doNotCacheIf("StrGuard Native outputs contain build-specific key material") { true }
+    }
+
     @TaskAction
     fun build() {
         val output = outputDirectory.get().asFile.toPath()
@@ -39,10 +52,7 @@ abstract class BuildNativeRuntimeTask : DefaultTask() {
             return
         }
 
-        val nativeTarget = NativeTarget.fromRustTriple(targetTriple.get())
-        if (!nativeTarget.extractFromResources) {
-            throw GradleException("Android Native targets must be built through an Android variant")
-        }
+        val nativeTarget = JvmNativeTarget.fromRustTriple(targetTriple.get())
         val target = nativeTarget.rustTriple
         val inputs = nativeInputDirectory.get().asFile.toPath().toAbsolutePath().normalize()
         val workspace = temporaryDir.toPath().resolve("native-runtime")
@@ -50,47 +60,59 @@ abstract class BuildNativeRuntimeTask : DefaultTask() {
         resetDirectory(workspace)
         resetDirectory(cargoTarget)
         copyRuntimeTemplate(workspace)
-
-        val command =
-            listOf(
-                cargoExecutable.get(),
-                "build",
-                "--manifest-path",
-                workspace.resolve("Cargo.toml").toString(),
-                "--release",
-                "--locked",
-                "--target",
-                target,
+        val environment =
+            linkedMapOf(
+                "CARGO_TARGET_DIR" to cargoTarget.toAbsolutePath().toString(),
+                "CARGO_INCREMENTAL" to "0",
+                "SOURCE_DATE_EPOCH" to "0",
             )
-        val process =
-            try {
-                ProcessBuilder(command)
-                    .directory(workspace.toFile())
-                    .redirectErrorStream(true)
-                    .apply {
-                        environment()["STRGUARD_CONFIG_DIR"] = inputs.toString()
-                        environment()["CARGO_TARGET_DIR"] = cargoTarget.toAbsolutePath().toString()
-                        environment()["SOURCE_DATE_EPOCH"] = "0"
-                    }
-                    .start()
-            } catch (failure: IOException) {
-                throw GradleException(
-                    "StrGuard cannot start Cargo executable '${cargoExecutable.get()}' for target $target. " +
-                            "Install Rust and Cargo, then add the target with 'rustup target add $target'.",
-                    failure,
-                )
-            }
-        val processOutput = process.inputStream.bufferedReader().use { it.readText() }
-        val exitCode = process.waitFor()
-        if (exitCode != 0) {
-            throw GradleException(
-                "StrGuard Rust runtime build failed for target $target " +
-                        "(command: ${command.joinToString(" ")}):\n$processOutput\n" +
-                        "Ensure Cargo is available and run 'rustup target add $target'.",
-            )
+        findMsvcToolchain(nativeTarget)?.let { toolchain ->
+            environment[cargoLinkerEnvironmentKey(nativeTarget)] = toolchain.linker.toString()
+            environment["LIB"] = toolchain.libraryPath
         }
-        if (processOutput.isNotBlank()) {
-            logger.info(processOutput.trim())
+        val manifest = workspace.resolve("Cargo.toml").toString()
+        try {
+            val runner = NativeProcessRunner(processRegistry.get())
+            runner.run(
+                command =
+                listOf(
+                    cargoExecutable.get(),
+                    "fetch",
+                    "--manifest-path",
+                    manifest,
+                    "--locked",
+                    "--offline",
+                    "--target",
+                    target,
+                ),
+                workingDirectory = workspace,
+                environment = nativeProcessEnvironment(environment),
+                timeout = Duration.ofSeconds(processTimeoutSeconds.get()),
+            )
+            copyNativeInputs(inputs, workspace.resolve("generated"))
+            runner.run(
+                command =
+                listOf(
+                    cargoExecutable.get(),
+                    "build",
+                    "--manifest-path",
+                    manifest,
+                    "--release",
+                    "--locked",
+                    "--offline",
+                    "--target",
+                    target,
+                ),
+                workingDirectory = workspace,
+                environment = nativeProcessEnvironment(environment),
+                timeout = Duration.ofSeconds(processTimeoutSeconds.get()),
+            )
+        } catch (failure: GradleException) {
+            throw GradleException(
+                "StrGuard Rust runtime build failed for target $target. " +
+                    "Ensure Cargo is available and run 'rustup target add $target'.",
+                failure,
+            )
         }
 
         val metadata = Properties()
@@ -99,7 +121,10 @@ abstract class BuildNativeRuntimeTask : DefaultTask() {
             ?: throw GradleException("StrGuard runtime metadata has no resourcePath")
         val fileName = metadata.getProperty("fileName")
             ?: throw GradleException("StrGuard runtime metadata has no fileName")
-        val expectedResourcePath = "META-INF/strguard/native/${nativeTarget.resourceDirectory}/$fileName"
+        if (metadata.getProperty("runtimeFamily") != "jvm") {
+            throw GradleException("StrGuard runtime metadata is not a JVM runtime")
+        }
+        val expectedResourcePath = nativeTarget.packagedResourcePath(fileName)
         if (resourcePath != expectedResourcePath) {
             throw GradleException(
                 "StrGuard runtime metadata target mismatch: expected $expectedResourcePath, got $resourcePath",
@@ -113,12 +138,29 @@ abstract class BuildNativeRuntimeTask : DefaultTask() {
         val packagedLibrary = output.resolve(resourcePath)
         Files.createDirectories(packagedLibrary.parent)
         Files.copy(compiledLibrary, packagedLibrary, StandardCopyOption.REPLACE_EXISTING)
+        writeArtifactMetadata(
+            output,
+            StrGuardArtifactMetadata.fromRuntimeProperties(
+                properties = metadata,
+                runtimeTarget = nativeTarget.rustTriple,
+                nativeResources = mapOf(resourcePath to sha256(packagedLibrary)),
+            ),
+        )
     }
 
     private fun copyRuntimeTemplate(destination: Path) {
         copyResource("Cargo.toml", destination.resolve("Cargo.toml"))
         copyResource("Cargo.lock", destination.resolve("Cargo.lock"))
+        copyResource("build.rs", destination.resolve("build.rs"))
         copyResource("src/lib.rs", destination.resolve("src/lib.rs"))
+        extractResourceArchive("vendor.zip", destination)
+    }
+
+    private fun copyNativeInputs(source: Path, destination: Path) {
+        Files.createDirectories(destination)
+        listOf("native_config.rs", "vault.bin").forEach { fileName ->
+            Files.copy(source.resolve(fileName), destination.resolve(fileName), StandardCopyOption.REPLACE_EXISTING)
+        }
     }
 
     private fun copyResource(relativePath: String, destination: Path) {
@@ -131,8 +173,10 @@ abstract class BuildNativeRuntimeTask : DefaultTask() {
         }
     }
 
-    private fun resetDirectory(directory: Path) {
-        directory.toFile().deleteRecursively()
-        Files.createDirectories(directory)
+    private fun extractResourceArchive(relativePath: String, destination: Path) {
+        val resourcePath = "strguard-native-runtime/$relativePath"
+        val resource = javaClass.classLoader.getResourceAsStream(resourcePath)
+            ?: throw GradleException("Missing bundled Rust runtime archive $resourcePath")
+        resource.use { input -> extractZip(input, destination) }
     }
 }

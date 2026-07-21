@@ -29,13 +29,13 @@ Run desktop samples from the repository root with the wrapper, for example:
 .\gradlew.bat -p samples/kotlin-multiplatform jvmJar
 ```
 
-Desktop builds require Rust and the target selected for the current host. Android builds additionally require Android SDK 34, NDK `27.0.12077973`, and the Rust `aarch64-linux-android` target:
+Desktop builds require Rust 1.94.1 and the target selected for the current host. Android builds additionally require Android SDK 34, NDK `27.2.12479018`, and all configured Rust Android targets:
 
 ```powershell
-rustup target add aarch64-linux-android
+rustup target add armv7-linux-androideabi aarch64-linux-android i686-linux-android x86_64-linux-android
 .\gradlew.bat -p samples/android-application assembleDebug
 .\gradlew.bat -p samples/android-library assembleDebug
 .\gradlew.bat -p samples/kotlin-android-application assembleDebug
 ```
 
-The Android examples intentionally package only `arm64-v8a` and use `minSdk = 21`, matching StrGuard's Android runtime contract.
+The Kotlin Android sample packages all four official ABIs and includes an AndroidX instrumentation test for JNI loading, literal identity, and UTF-16. Run it through the Firebase device-farm workflow; local sample commands do not start an emulator. All Android samples use `minSdk = 21`.

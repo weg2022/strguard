@@ -6,9 +6,12 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import org.objectweb.asm.*
 import java.net.URLClassLoader
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.Properties
 import java.util.jar.JarFile
 import kotlin.test.*
 
@@ -59,6 +62,90 @@ class StrGuardPluginFunctionalTest {
                     Number number = useInteger ? Integer.valueOf(1) : Long.valueOf(2L);
                     return "number=" + number.intValue() + value;
                 }
+
+                public static String identityFirst() {
+                    return "shared-identity";
+                }
+
+                public static String identitySecond() {
+                    return "shared-identity";
+                }
+
+                public static boolean preservesLiteralIdentity() {
+                    return identityFirst() == identitySecond()
+                        && identityFirst() == IdentityPeer.sharedIdentity()
+                        && identityFirst() == "shared-identity"
+                        && CONSTANT == "java-constant";
+                }
+
+                public static boolean preservesMonitorIdentity() {
+                    synchronized ("shared-monitor") {
+                        return Thread.holdsLock(IdentityPeer.monitorIdentity());
+                    }
+                }
+
+                public static boolean concurrentFirstAccess() throws InterruptedException {
+                    int count = 16;
+                    String[] values = new String[count];
+                    Thread[] threads = new Thread[count];
+                    java.util.concurrent.CountDownLatch ready = new java.util.concurrent.CountDownLatch(count);
+                    java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+                    for (int index = 0; index < count; index++) {
+                        final int resultIndex = index;
+                        threads[index] = new Thread(() -> {
+                            ready.countDown();
+                            try {
+                                start.await();
+                                values[resultIndex] = IdentityPeer.concurrentIdentity();
+                            } catch (InterruptedException interrupted) {
+                                Thread.currentThread().interrupt();
+                            }
+                        });
+                        threads[index].start();
+                    }
+                    if (!ready.await(10, java.util.concurrent.TimeUnit.SECONDS)) {
+                        return false;
+                    }
+                    start.countDown();
+                    for (Thread thread : threads) {
+                        thread.join(10_000);
+                        if (thread.isAlive()) {
+                            return false;
+                        }
+                    }
+                    for (int index = 1; index < count; index++) {
+                        if (values[index] == null || values[index] != values[0]) {
+                            return false;
+                        }
+                    }
+                    return values[0] != null;
+                }
+
+                public static String specialUtf16() {
+                    return "prefix\0\uD800middle\uDC00\uD83D\uDE00suffix";
+                }
+            }
+            """.trimIndent(),
+        )
+        writeFile(
+            "src/main/java/sample/IdentityPeer.java",
+            """
+            package sample;
+
+            public final class IdentityPeer {
+                private IdentityPeer() {}
+
+                public static String sharedIdentity() {
+                    return "shared-identity";
+                }
+
+                public static String monitorIdentity() {
+                    return "shared-monitor";
+                }
+
+                public static String concurrentIdentity() {
+                    return "concurrent-first-access";
+                }
             }
             """.trimIndent(),
         )
@@ -84,6 +171,44 @@ class StrGuardPluginFunctionalTest {
         assertEquals(TaskOutcome.SUCCESS, result.task(":transformStrGuardMain")?.outcome)
         assertEquals(TaskOutcome.SUCCESS, result.task(":buildStrGuardNativeMain")?.outcome)
         assertTrue(cachedResult.output.contains("Reusing configuration cache."))
+        assertFalse(
+            directoryContainsText(projectDirectory.resolve(".gradle/configuration-cache"), TEST_RELEASE_SEED),
+            "Gradle configuration cache contains the raw StrGuard release seed",
+        )
+        val nativeTarget = hostNativeTarget()
+        val reportPath = projectDirectory.resolve("build/reports/strguard/main/summary.txt")
+        val reportText = Files.readString(reportPath)
+        val summary = Properties().apply {
+            Files.newBufferedReader(reportPath, StandardCharsets.UTF_8).use(::load)
+        }
+        assertEquals(
+            setOf(
+                "schemaVersion",
+                "enabled",
+                "runtimeTarget",
+                "inputClasses",
+                "eligibleClasses",
+                "matchedClasses",
+                "skippedClasses",
+                "protectedStrings",
+                "removedMetadata",
+                "unmatchedKeepStringPackages",
+                "unmatchedKeepMetadataPackages",
+            ),
+            summary.stringPropertyNames(),
+        )
+        assertEquals("1", summary.getProperty("schemaVersion"))
+        assertEquals("true", summary.getProperty("enabled"))
+        assertEquals(nativeTarget.rustTriple, summary.getProperty("runtimeTarget"))
+        assertEquals("3", summary.getProperty("inputClasses"))
+        assertEquals("3", summary.getProperty("eligibleClasses"))
+        assertEquals("3", summary.getProperty("matchedClasses"))
+        assertEquals("0", summary.getProperty("skippedClasses"))
+        assertTrue(summary.getProperty("protectedStrings").toInt() > 0)
+        assertEquals("0", summary.getProperty("removedMetadata"))
+        assertFalse(reportText.contains(TEST_RELEASE_SEED))
+        assertFalse(reportText.contains("java-constant"))
+        assertFalse(reportText.contains("prefix-"))
         val transformedClasses = projectDirectory.resolve("build/strguard/classes/main")
         val nativeResources = projectDirectory.resolve("build/strguard/native-resources/main")
         val transformedExample = transformedClasses.resolve("sample/JavaExample.class")
@@ -107,21 +232,49 @@ class StrGuardPluginFunctionalTest {
             assertEquals("number=1x", numeric.invoke(null, true, "x"))
             assertEquals("number=2x", numeric.invoke(null, false, "x"))
             assertEquals("java-constant", example.getField("CONSTANT").get(null))
+            assertEquals(true, example.getMethod("preservesLiteralIdentity").invoke(null))
+            assertEquals(true, example.getMethod("preservesMonitorIdentity").invoke(null))
+            assertEquals(true, example.getMethod("concurrentFirstAccess").invoke(null))
+            val specialUtf16 = example.getMethod("specialUtf16").invoke(null) as String
+            assertContentEquals(
+                "prefix\u0000\uD800middle\uDC00\uD83D\uDE00suffix".toCharArray(),
+                specialUtf16.toCharArray(),
+            )
         }
 
         val artifact = projectDirectory.resolve("build/libs/java-consumer.jar")
-        val nativeTarget = hostNativeTarget()
         JarFile(artifact.toFile()).use { jar ->
             val entry = assertNotNull(jar.getJarEntry("sample/JavaExample.class"))
             val contents = jar.getInputStream(entry).readBytes().toString(StandardCharsets.ISO_8859_1)
             assertFalse(contents.contains("java-constant"))
-            assertNotNull(jar.getJarEntry("io/github/weg2022/strguard/runtime/NativeLibraryLoader.class"))
             assertTrue(
                 jar.entries().asSequence().any {
-                    it.name.startsWith("META-INF/strguard/native/${nativeTarget.resourceDirectory}/") &&
-                            it.name.endsWith(nativeTarget.libraryExtension)
+                    it.name.startsWith("io/github/weg2022/strguard/generated/L") && it.name.endsWith(".class")
                 },
             )
+            assertNull(jar.getJarEntry("io/github/weg2022/strguard/runtime/NativeLibraryLoader.class"))
+            assertTrue(
+                jar.entries().asSequence().any {
+                    it.name.startsWith("META-INF/strguard/native/${nativeTarget.packagingDirectory}/") &&
+                        it.name.endsWith(nativeTarget.libraryExtension)
+                },
+            )
+            val markerEntry =
+                assertNotNull(
+                    jar.entries().asSequence().singleOrNull {
+                        it.name.startsWith("META-INF/strguard/artifacts/") && it.name.endsWith(".properties")
+                    },
+                )
+            val marker = Properties().apply { jar.getInputStream(markerEntry).use(::load) }
+            assertEquals("protected", marker.getProperty("stage"))
+            assertEquals(nativeTarget.rustTriple, marker.getProperty("runtimeTarget"))
+            assertEquals(8, marker.getProperty("gatewayNames").split(',').size)
+            assertTrue(marker.getProperty("loaderClass").startsWith("io/github/weg2022/strguard/generated/L"))
+            val artifactId = assertNotNull(marker.getProperty("artifactId"))
+            val embeddedRules = assertNotNull(jar.getJarEntry("META-INF/proguard/strguard-$artifactId.pro"))
+            val rulesText = jar.getInputStream(embeddedRules).bufferedReader().use { it.readText() }
+            assertTrue(rulesText.contains("generated.B*"))
+            assertTrue(rulesText.contains("generated.L*"))
             assertTrue(jar.getJarEntry("io/github/weg2022/strguard/runtime/StrGuardRuntime.class") == null)
         }
         val nativeLibrary = findNativeLibrary(nativeResources, nativeTarget)
@@ -134,6 +287,22 @@ class StrGuardPluginFunctionalTest {
         val nativeBytes = Files.readAllBytes(nativeLibrary)
         assertFalse(nativeBytes.containsSequence(keyMaterial.masterKey))
         keyMaterial.shares.forEach { share -> assertFalse(nativeBytes.containsSequence(share)) }
+
+        tamperEmbeddedVault(
+            nativeLibrary,
+            projectDirectory.resolve("build/strguard/native-input/main/vault.bin"),
+        )
+        URLClassLoader(
+            arrayOf(transformedClasses.toUri().toURL(), nativeResources.toUri().toURL()),
+            ClassLoader.getPlatformClassLoader(),
+        ).use { loader ->
+            val failure = assertFails { Class.forName("sample.JavaExample", true, loader) }
+            val messages = generateSequence(failure) { cause -> cause.cause }.mapNotNull(Throwable::message).toList()
+            assertTrue(
+                messages.any { message -> message.contains("StrGuard vault authentication failed") },
+                "Expected Native authentication failure, got: $messages",
+            )
+        }
     }
 
     @Test
@@ -183,6 +352,16 @@ class StrGuardPluginFunctionalTest {
 
             class KotlinExample {
                 fun reveal(value: String): String = "prefix-${'$'}value-suffix"
+
+                fun preservesLiteralIdentity(): Boolean =
+                    localIdentity() === KotlinIdentityPeer.sharedIdentity() &&
+                        localIdentity() === "kotlin-shared-identity"
+
+                private fun localIdentity(): String = "kotlin-shared-identity"
+            }
+
+            object KotlinIdentityPeer {
+                fun sharedIdentity(): String = "kotlin-shared-identity"
             }
 
             @KeepString
@@ -213,18 +392,78 @@ class StrGuardPluginFunctionalTest {
             val example = Class.forName("sample.KotlinExample", true, loader)
             val instance = example.getConstructor().newInstance()
             assertEquals("prefix-value-suffix", example.getMethod("reveal", String::class.java).invoke(instance, "value"))
+            assertEquals(true, example.getMethod("preservesLiteralIdentity").invoke(instance))
 
             val topLevel = Class.forName("sample.KotlinExampleKt", true, loader)
             assertEquals("kotlin-constant", topLevel.getField("EXPOSED").get(null))
         }
     }
 
-    private fun runner(vararg arguments: String): GradleRunner =
-        GradleRunner.create()
-            .withProjectDir(projectDirectory.toFile())
-            .withPluginClasspath()
-            .withArguments(*arguments, "--stacktrace")
-            .forwardOutput()
+    @Test
+    fun `preserves interned literal identity across protected modules`() {
+        writeFile(
+            "settings.gradle.kts",
+            """
+            rootProject.name = "identity-modules"
+            include("one", "two")
+            """.trimIndent(),
+        )
+        listOf("one", "two").forEach { module ->
+            writeFile(
+                "$module/build.gradle.kts",
+                """
+                plugins {
+                    java
+                    id("io.github.weg2022.strguard")
+                }
+
+                strGuard {
+                    releaseSeedHex.set("$TEST_RELEASE_SEED")
+                    stringGuardPackages.set(listOf("sample"))
+                }
+                """.trimIndent(),
+            )
+            val className = module.replaceFirstChar(Char::uppercaseChar)
+            writeFile(
+                "$module/src/main/java/sample/$module/${className}Value.java",
+                """
+                package sample.$module;
+
+                public final class ${className}Value {
+                    private ${className}Value() {}
+
+                    public static String reveal() {
+                        return "cross-module-identity";
+                    }
+                }
+                """.trimIndent(),
+            )
+        }
+
+        val result = runner(":one:classes", ":two:classes").build()
+
+        assertEquals(TaskOutcome.SUCCESS, result.task(":one:buildStrGuardNativeMain")?.outcome)
+        assertEquals(TaskOutcome.SUCCESS, result.task(":two:buildStrGuardNativeMain")?.outcome)
+        URLClassLoader(
+            arrayOf(
+                projectDirectory.resolve("one/build/strguard/classes/main").toUri().toURL(),
+                projectDirectory.resolve("one/build/strguard/native-resources/main").toUri().toURL(),
+                projectDirectory.resolve("two/build/strguard/classes/main").toUri().toURL(),
+                projectDirectory.resolve("two/build/strguard/native-resources/main").toUri().toURL(),
+            ),
+            ClassLoader.getPlatformClassLoader(),
+        ).use { loader ->
+            val one = Class.forName("sample.one.OneValue", true, loader).getMethod("reveal").invoke(null) as String
+            val two = Class.forName("sample.two.TwoValue", true, loader).getMethod("reveal").invoke(null) as String
+            assertSame(one, two)
+        }
+    }
+
+    private fun runner(vararg arguments: String): GradleRunner = GradleRunner.create()
+        .withProjectDir(projectDirectory.toFile())
+        .withPluginClasspath()
+        .withArguments(*arguments, "--stacktrace")
+        .forwardOutput()
 
     private fun writeFile(relativePath: String, contents: String) {
         val file = projectDirectory.resolve(relativePath)
@@ -232,23 +471,31 @@ class StrGuardPluginFunctionalTest {
         Files.writeString(file, contents, StandardCharsets.UTF_8)
     }
 
-    private fun classContains(classFile: Path, value: String): Boolean =
-        Files.readAllBytes(classFile).toString(StandardCharsets.ISO_8859_1).contains(value)
+    private fun classContains(classFile: Path, value: String): Boolean = Files.readAllBytes(classFile).toString(StandardCharsets.ISO_8859_1).contains(value)
 
-    private fun findNativeLibrary(nativeResources: Path, nativeTarget: NativeTarget): Path =
-        Files.walk(nativeResources).use { paths ->
-            paths.filter {
-                Files.isRegularFile(it) && it.fileName.toString().endsWith(nativeTarget.libraryExtension)
-            }
-                .findFirst()
-                .orElseThrow { AssertionError("No StrGuard Native library was generated") }
+    private fun directoryContainsText(directory: Path, value: String): Boolean {
+        if (!Files.isDirectory(directory)) return false
+        return Files.walk(directory).use { paths ->
+            paths.iterator().asSequence()
+                .filter(Files::isRegularFile)
+                .any { file ->
+                    Files.readAllBytes(file).toString(StandardCharsets.ISO_8859_1).contains(value)
+                }
         }
+    }
 
-    private fun hostNativeTarget(): NativeTarget =
-        NativeTarget.detectHost(
-            System.getProperty("os.name"),
-            System.getProperty("os.arch"),
-        )
+    private fun findNativeLibrary(nativeResources: Path, nativeTarget: JvmNativeTarget): Path = Files.walk(nativeResources).use { paths ->
+        paths.filter {
+            Files.isRegularFile(it) && it.fileName.toString().endsWith(nativeTarget.libraryExtension)
+        }
+            .findFirst()
+            .orElseThrow { AssertionError("No StrGuard Native library was generated") }
+    }
+
+    private fun hostNativeTarget(): JvmNativeTarget = JvmNativeTarget.detectHost(
+        System.getProperty("os.name"),
+        System.getProperty("os.arch"),
+    )
 
     private fun readGeneratedKeyMaterial(nativeConfig: Path): GeneratedKeyMaterial {
         val source = Files.readString(nativeConfig)
@@ -261,8 +508,10 @@ class StrGuardPluginFunctionalTest {
                     repeat(KEY_SIZE) { encodedIndex ->
                         val targetIndex = orders[shareIndex][encodedIndex].toInt() and 0xff
                         share[targetIndex] =
-                            (encodedShares[shareIndex][encodedIndex].toInt() xor
-                                    masks[shareIndex][encodedIndex].toInt()).toByte()
+                            (
+                                encodedShares[shareIndex][encodedIndex].toInt() xor
+                                    masks[shareIndex][encodedIndex].toInt()
+                                ).toByte()
                     }
                 }
             }
@@ -304,6 +553,31 @@ class StrGuardPluginFunctionalTest {
         )
         return found
     }
+
+    private fun tamperEmbeddedVault(nativeLibrary: Path, vaultFile: Path) {
+        val vault = Files.readAllBytes(vaultFile)
+        val modifiedVault = vault.copyOf()
+        val vaultBuffer = ByteBuffer.wrap(modifiedVault).order(ByteOrder.LITTLE_ENDIAN)
+        vaultBuffer.position(VAULT_RECORD_COUNT_OFFSET)
+        val recordCount = vaultBuffer.int
+        check(recordCount > 0)
+        repeat(recordCount) {
+            val bodyLength = vaultBuffer.int
+            val bodyStart = vaultBuffer.position()
+            vaultBuffer.position(bodyStart + VAULT_RECORD_CIPHERTEXT_LENGTH_OFFSET)
+            val ciphertextLength = vaultBuffer.int
+            check(ciphertextLength > 0)
+            val ciphertextStart = vaultBuffer.position()
+            modifiedVault[ciphertextStart] = (modifiedVault[ciphertextStart].toInt() xor 1).toByte()
+            vaultBuffer.position(bodyStart + bodyLength)
+        }
+
+        val nativeBytes = Files.readAllBytes(nativeLibrary)
+        val vaultOffset = nativeBytes.indexOfSequence(vault)
+        check(vaultOffset >= 0) { "Native library does not contain the generated vault" }
+        modifiedVault.copyInto(nativeBytes, vaultOffset)
+        Files.write(nativeLibrary, nativeBytes)
+    }
 }
 
 private class GeneratedKeyMaterial(
@@ -311,13 +585,16 @@ private class GeneratedKeyMaterial(
     val masterKey: ByteArray,
 )
 
-private fun ByteArray.containsSequence(needle: ByteArray): Boolean {
+private fun ByteArray.containsSequence(needle: ByteArray): Boolean = indexOfSequence(needle) >= 0
+
+private fun ByteArray.indexOfSequence(needle: ByteArray): Int {
     if (needle.isEmpty() || needle.size > size) {
-        return false
+        return -1
     }
-    return (0..size - needle.size).any { offset ->
+    return (0..size - needle.size).firstOrNull { offset ->
         needle.indices.all { index -> this[offset + index] == needle[index] }
     }
+        ?: -1
 }
 
 private const val TEST_RELEASE_SEED =
@@ -325,4 +602,6 @@ private const val TEST_RELEASE_SEED =
 private const val KEY_SHARE_COUNT = 4
 private const val KEY_SIZE = 32
 private const val JAVA_11_CLASS_VERSION = 55
+private const val VAULT_RECORD_COUNT_OFFSET = 4 + 1 + 16
+private const val VAULT_RECORD_CIPHERTEXT_LENGTH_OFFSET = 16 + 1 + 12 + 4
 private val HEX_BYTE = Regex("0x([0-9a-f]{2})")

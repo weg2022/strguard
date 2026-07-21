@@ -64,7 +64,7 @@ class JvmPluginCompatibilityTest {
         }
 
         val artifact = Files.list(projectDirectory.resolve("build/libs")).use { files ->
-            files.toList().single { it.fileName.toString().endsWith(".jar") }
+            files.iterator().asSequence().single { it.fileName.toString().endsWith(".jar") }
         }
         JarFile(artifact.toFile()).use { jar ->
             val entry = assertNotNull(jar.getJarEntry("sample/Compatibility.class"))
@@ -72,19 +72,18 @@ class JvmPluginCompatibilityTest {
             assertFalse(classText.contains("sensitive-value"))
             assertTrue(
                 jar.entries().asSequence().any {
-                    it.name.startsWith("META-INF/strguard/native/${nativeTarget.resourceDirectory}/") &&
-                            it.name.endsWith(nativeTarget.libraryExtension)
+                    it.name.startsWith("META-INF/strguard/native/${nativeTarget.packagingDirectory}/") &&
+                        it.name.endsWith(nativeTarget.libraryExtension)
                 },
             )
         }
     }
 
-    private fun runner(vararg arguments: String): GradleRunner =
-        GradleRunner.create()
-            .withProjectDir(projectDirectory.toFile())
-            .withPluginClasspath()
-            .withArguments(*arguments, "--stacktrace")
-            .forwardOutput()
+    private fun runner(vararg arguments: String): GradleRunner = GradleRunner.create()
+        .withProjectDir(projectDirectory.toFile())
+        .withPluginClasspath()
+        .withArguments(*arguments, "--stacktrace")
+        .forwardOutput()
 
     private fun writeFile(relativePath: String, contents: String) {
         val file = projectDirectory.resolve(relativePath)
@@ -92,11 +91,9 @@ class JvmPluginCompatibilityTest {
         Files.writeString(file, contents, StandardCharsets.UTF_8)
     }
 
-    private fun classContains(classFile: Path, value: String): Boolean =
-        Files.readAllBytes(classFile).toString(StandardCharsets.ISO_8859_1).contains(value)
+    private fun classContains(classFile: Path, value: String): Boolean = Files.readAllBytes(classFile).toString(StandardCharsets.ISO_8859_1).contains(value)
 
-    private fun hostNativeTarget(): NativeTarget =
-        NativeTarget.detectHost(System.getProperty("os.name"), System.getProperty("os.arch"))
+    private fun hostNativeTarget(): JvmNativeTarget = JvmNativeTarget.detectHost(System.getProperty("os.name"), System.getProperty("os.arch"))
 }
 
 private const val JVM_COMPATIBILITY_TEST_SEED =

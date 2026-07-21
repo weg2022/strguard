@@ -1,0 +1,2 @@
+-keep class sample.kotlin.android.MainActivity { public *; }
+-keep class sample.kotlin.android.AndroidIdentityPeer { public *; }

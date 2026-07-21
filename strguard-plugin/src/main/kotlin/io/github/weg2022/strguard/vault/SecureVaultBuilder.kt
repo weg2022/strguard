@@ -1,6 +1,6 @@
 package io.github.weg2022.strguard.vault
 
-import io.github.weg2022.strguard.NativeTarget
+import io.github.weg2022.strguard.VaultRuntimeTarget
 import io.github.weg2022.strguard.crypto.CryptoPrimitives
 import java.io.BufferedOutputStream
 import java.io.DataOutputStream
@@ -13,95 +13,129 @@ internal class SecureVaultBuilder(
     releaseSeedHex: String,
     moduleIdentity: String,
     inputDigest: ByteArray,
-    private val nativeTarget: NativeTarget,
-) {
-    private val releaseSeed = CryptoPrimitives.parseHex256(releaseSeedHex)
+    private val runtimeTarget: VaultRuntimeTarget,
+) : AutoCloseable {
     private val moduleBytes = CryptoPrimitives.utf8(moduleIdentity)
-    private val targetBytes = CryptoPrimitives.utf8(nativeTarget.rustTriple)
-    private val buildId =
-        CryptoPrimitives.hmacSha256(
-            releaseSeed,
-            BUILD_ID_LABEL,
-            moduleBytes,
-            byteArrayOf(0),
-            targetBytes,
-            inputDigest,
-        ).copyOf(BUILD_ID_SIZE)
-    private val masterKey =
-        CryptoPrimitives.hkdfSha256(
-            inputKeyMaterial = releaseSeed,
-            salt = inputDigest,
-            info = BUILD_KEY_LABEL + moduleBytes + byteArrayOf(0) + targetBytes,
-            outputLength = KEY_SIZE,
-        )
+    private val targetBytes = CryptoPrimitives.utf8(runtimeTarget.vaultIdentity)
+    private val buildId: ByteArray
+    private val masterKey: ByteArray
     private val records = mutableListOf<VaultRecord>()
     private val capabilities = mutableSetOf<String>()
-    private val bridgeModel = createBridgeModel()
+    private val bridgeModel: BridgeModel
+    private var closed = false
+
+    init {
+        val releaseSeed = CryptoPrimitives.parseHex256(releaseSeedHex)
+        try {
+            buildId =
+                CryptoPrimitives.hmacSha256(
+                    releaseSeed,
+                    BUILD_ID_LABEL,
+                    moduleBytes,
+                    byteArrayOf(0),
+                    targetBytes,
+                    inputDigest,
+                ).clearedAfter { digest -> digest.copyOf(BUILD_ID_SIZE) }
+            val keyInfo = BUILD_KEY_LABEL + moduleBytes + byteArrayOf(0) + targetBytes
+            try {
+                masterKey =
+                    CryptoPrimitives.hkdfSha256(
+                        inputKeyMaterial = releaseSeed,
+                        salt = inputDigest,
+                        info = keyInfo,
+                        outputLength = KEY_SIZE,
+                    )
+            } finally {
+                keyInfo.fill(0)
+            }
+        } finally {
+            releaseSeed.fill(0)
+        }
+        bridgeModel = createBridgeModel()
+    }
 
     val bridge: BridgeModel
-        get() = bridgeModel
+        get() {
+            checkOpen()
+            return bridgeModel
+        }
 
     val protectedStringCount: Int
-        get() = records.size
+        get() {
+            checkOpen()
+            return records.size
+        }
 
     fun protect(rawValue: String, callSiteIdentity: String): VaultReference? {
-        val plaintext = CryptoPrimitives.utf8(rawValue)
-        if (plaintext.isEmpty() || plaintext.size > MAX_PLAINTEXT_SIZE) {
+        checkOpen()
+        val plaintext = CryptoPrimitives.utf16Le(rawValue)
+        if (plaintext.isEmpty() || plaintext.size > MAX_PLAINTEXT_BYTES) {
             return null
         }
+        val callSiteBytes = CryptoPrimitives.utf8(callSiteIdentity)
+        var recordKey: ByteArray? = null
+        try {
+            val callSiteDigest =
+                CryptoPrimitives.sha256(
+                    callSiteBytes,
+                    byteArrayOf(0),
+                    plaintext,
+                )
+            val capability =
+                CryptoPrimitives.hmacSha256(masterKey, CAPABILITY_LABEL, callSiteDigest)
+                    .clearedAfter { digest -> digest.copyOf(CAPABILITY_SIZE) }
+            callSiteDigest.fill(0)
+            check(capabilities.add(CryptoPrimitives.hex(capability))) {
+                "Duplicate StrGuard call-site identity: $callSiteIdentity"
+            }
 
-        val callSiteDigest =
-            CryptoPrimitives.sha256(
-                CryptoPrimitives.utf8(callSiteIdentity),
-                byteArrayOf(0),
-                plaintext,
-            )
-        val capability =
-            CryptoPrimitives.hmacSha256(masterKey, CAPABILITY_LABEL, callSiteDigest)
-                .copyOf(CAPABILITY_SIZE)
-        check(capabilities.add(CryptoPrimitives.hex(capability))) {
-            "Duplicate StrGuard call-site identity: $callSiteIdentity"
-        }
-
-        val gatewayIndex =
-            (CryptoPrimitives.hmacSha256(masterKey, GATEWAY_LABEL, capability)[0].toInt() and 0xff) %
+            val gatewayIndex =
+                CryptoPrimitives.hmacSha256(masterKey, GATEWAY_LABEL, capability)
+                    .clearedAfter { digest -> (digest[0].toInt() and 0xff) } %
                     GATEWAY_COUNT
-        val recordKey = deriveRecordKey(capability, gatewayIndex)
-        val nonce =
-            CryptoPrimitives.hmacSha256(recordKey, NONCE_LABEL, capability).copyOf(NONCE_SIZE)
-        val associatedData = associatedData(capability, gatewayIndex, plaintext.size)
-        val ciphertext =
-            CryptoPrimitives.encryptChaCha20Poly1305(
-                key = recordKey,
-                nonce = nonce,
-                associatedData = associatedData,
-                plaintext = plaintext,
-            )
-        val paddingLength =
-            (CryptoPrimitives.hmacSha256(masterKey, PADDING_LABEL, capability)[0].toInt() and 0x1f)
-        val padding = deterministicBytes(PADDING_BYTES_LABEL, capability, paddingLength)
-        val orderKey = CryptoPrimitives.hmacSha256(masterKey, ORDER_LABEL, capability)
-        records +=
-            VaultRecord(
-                capability = capability,
-                gatewayIndex = gatewayIndex,
-                nonce = nonce,
-                plaintextLength = plaintext.size,
-                ciphertext = ciphertext,
-                padding = padding,
-                orderKey = orderKey,
-            )
+            recordKey = deriveRecordKey(capability, gatewayIndex)
+            val nonce =
+                CryptoPrimitives.hmacSha256(recordKey, NONCE_LABEL, capability)
+                    .clearedAfter { digest -> digest.copyOf(NONCE_SIZE) }
+            val associatedData = associatedData(capability, gatewayIndex, rawValue.length)
+            val ciphertext =
+                CryptoPrimitives.encryptChaCha20Poly1305(
+                    key = recordKey,
+                    nonce = nonce,
+                    associatedData = associatedData,
+                    plaintext = plaintext,
+                )
+            associatedData.fill(0)
+            val paddingLength =
+                CryptoPrimitives.hmacSha256(masterKey, PADDING_LABEL, capability)
+                    .clearedAfter { digest -> digest[0].toInt() and 0x1f }
+            val padding = deterministicBytes(PADDING_BYTES_LABEL, capability, paddingLength)
+            val orderKey = CryptoPrimitives.hmacSha256(masterKey, ORDER_LABEL, capability)
+            records +=
+                VaultRecord(
+                    capability = capability,
+                    gatewayIndex = gatewayIndex,
+                    nonce = nonce,
+                    plaintextLength = rawValue.length,
+                    ciphertext = ciphertext,
+                    padding = padding,
+                    orderKey = orderKey,
+                )
 
-        plaintext.fill(0)
-        recordKey.fill(0)
-        return VaultReference(
-            capabilityHigh = CryptoPrimitives.longFromBigEndian(capability, 0),
-            capabilityLow = CryptoPrimitives.longFromBigEndian(capability, Long.SIZE_BYTES),
-            gatewayIndex = gatewayIndex,
-        )
+            return VaultReference(
+                capabilityHigh = CryptoPrimitives.longFromBigEndian(capability, 0),
+                capabilityLow = CryptoPrimitives.longFromBigEndian(capability, Long.SIZE_BYTES),
+                gatewayIndex = gatewayIndex,
+            )
+        } finally {
+            callSiteBytes.fill(0)
+            plaintext.fill(0)
+            recordKey?.fill(0)
+        }
     }
 
     fun writeNativeInputs(outputDirectory: Path): NativeVaultModel {
+        checkOpen()
         outputDirectory.toFile().deleteRecursively()
         Files.createDirectories(outputDirectory)
         writeVault(outputDirectory.resolve(VAULT_FILE_NAME))
@@ -111,30 +145,40 @@ internal class SecureVaultBuilder(
                 buildId = buildId.copyOf(),
                 keyShares = encodeMasterKeyShares(),
             )
-        writeRustConfig(outputDirectory.resolve(RUST_CONFIG_FILE_NAME), model)
-        writeRuntimeMetadata(outputDirectory.resolve(RUNTIME_METADATA_FILE_NAME), model)
-        return model
+        try {
+            writeRustConfig(outputDirectory.resolve(RUST_CONFIG_FILE_NAME), model)
+            writeRuntimeMetadata(outputDirectory.resolve(RUNTIME_METADATA_FILE_NAME), model)
+            return model
+        } catch (failure: Throwable) {
+            model.close()
+            throw failure
+        }
     }
 
-    private fun deriveRecordKey(capability: ByteArray, gatewayIndex: Int): ByteArray =
-        CryptoPrimitives.hkdfSha256(
-            inputKeyMaterial = masterKey,
-            salt = buildId,
-            info = RECORD_KEY_LABEL + capability + byteArrayOf(gatewayIndex.toByte()),
-            outputLength = KEY_SIZE,
-        )
+    private fun deriveRecordKey(capability: ByteArray, gatewayIndex: Int): ByteArray {
+        val info = RECORD_KEY_LABEL + capability + byteArrayOf(gatewayIndex.toByte())
+        return try {
+            CryptoPrimitives.hkdfSha256(
+                inputKeyMaterial = masterKey,
+                salt = buildId,
+                info = info,
+                outputLength = KEY_SIZE,
+            )
+        } finally {
+            info.fill(0)
+        }
+    }
 
     private fun associatedData(
         capability: ByteArray,
         gatewayIndex: Int,
         plaintextLength: Int,
-    ): ByteArray =
-        VAULT_MAGIC +
-                byteArrayOf(VAULT_VERSION.toByte()) +
-                buildId +
-                capability +
-                byteArrayOf(gatewayIndex.toByte()) +
-                CryptoPrimitives.intLe(plaintextLength)
+    ): ByteArray = VAULT_MAGIC +
+        byteArrayOf(VAULT_VERSION.toByte()) +
+        buildId +
+        capability +
+        byteArrayOf(gatewayIndex.toByte()) +
+        CryptoPrimitives.intLe(plaintextLength)
 
     private fun writeVault(output: Path) {
         val orderedRecords = records.sortedWith { left, right -> compareBytes(left.orderKey, right.orderKey) }
@@ -150,13 +194,13 @@ internal class SecureVaultBuilder(
     private fun writeRecord(data: DataOutputStream, record: VaultRecord) {
         val bodyLength =
             CAPABILITY_SIZE +
-                    1 +
-                    NONCE_SIZE +
-                    Int.SIZE_BYTES +
-                    Int.SIZE_BYTES +
-                    record.ciphertext.size +
-                    Short.SIZE_BYTES +
-                    record.padding.size
+                1 +
+                NONCE_SIZE +
+                Int.SIZE_BYTES +
+                Int.SIZE_BYTES +
+                record.ciphertext.size +
+                Short.SIZE_BYTES +
+                record.padding.size
         data.writeIntLe(bodyLength)
         data.write(record.capability)
         data.writeByte(record.gatewayIndex)
@@ -170,19 +214,26 @@ internal class SecureVaultBuilder(
 
     private fun createBridgeModel(): BridgeModel {
         val classSuffix = deterministicHex(BRIDGE_CLASS_LABEL, 12)
+        val loaderSuffix = deterministicHex(LOADER_CLASS_LABEL, 12)
         val librarySuffix = deterministicHex(LIBRARY_NAME_LABEL, 12)
         val methodNames =
             List(GATEWAY_COUNT) { index ->
                 "m${deterministicHex(METHOD_NAME_LABEL + byteArrayOf(index.toByte()), 10)}"
             }
-        val fileName = nativeTarget.packagedLibraryFileName(librarySuffix)
+        val fileName = runtimeTarget.packagedLibraryFileName(librarySuffix)
         return BridgeModel(
             internalClassName = "io/github/weg2022/strguard/generated/B$classSuffix",
+            loaderInternalClassName =
+            if (runtimeTarget.runtimeFamily.extractFromResources) {
+                "io/github/weg2022/strguard/generated/L$loaderSuffix"
+            } else {
+                null
+            },
             methodNames = methodNames,
-            nativeLibraryResourcePath = nativeTarget.packagedResourcePath(fileName),
+            nativeLibraryResourcePath = runtimeTarget.packagedResourcePath(fileName),
             nativeLibraryFileName = fileName,
-            nativeLibraryLoadName = nativeTarget.libraryLoadName(librarySuffix),
-            extractFromResources = nativeTarget.extractFromResources,
+            nativeLibraryLoadName = runtimeTarget.libraryLoadName(librarySuffix),
+            extractFromResources = runtimeTarget.runtimeFamily.extractFromResources,
         )
     }
 
@@ -214,22 +265,25 @@ internal class SecureVaultBuilder(
         }
     }
 
-    private fun keyShareOrder(shareIndex: Int): ByteArray =
-        (0 until KEY_SIZE)
-            .map { sourceIndex ->
-                sourceIndex to
-                        deterministicBytes(
-                            KEY_SHARE_ORDER_LABEL + byteArrayOf(shareIndex.toByte(), sourceIndex.toByte()),
-                            buildId,
-                            KEY_SIZE,
-                        )
+    private fun keyShareOrder(shareIndex: Int): ByteArray = (0 until KEY_SIZE)
+        .map { sourceIndex ->
+            sourceIndex to
+                deterministicBytes(
+                    KEY_SHARE_ORDER_LABEL + byteArrayOf(shareIndex.toByte(), sourceIndex.toByte()),
+                    buildId,
+                    KEY_SIZE,
+                )
+        }.let { rankedIndexes ->
+            try {
+                rankedIndexes.sortedWith { left, right ->
+                    compareBytes(left.second, right.second).takeIf { it != 0 }
+                        ?: left.first.compareTo(right.first)
+                }.map { (sourceIndex) -> sourceIndex.toByte() }
+                    .toByteArray()
+            } finally {
+                rankedIndexes.forEach { (_, rank) -> rank.fill(0) }
             }
-            .sortedWith { left, right ->
-                compareBytes(left.second, right.second).takeIf { it != 0 }
-                    ?: left.first.compareTo(right.first)
-            }
-            .map { (sourceIndex) -> sourceIndex.toByte() }
-            .toByteArray()
+        }
 
     private fun writeRustConfig(output: Path, model: NativeVaultModel) {
         val source = buildString {
@@ -255,14 +309,19 @@ internal class SecureVaultBuilder(
         Files.writeString(
             output,
             buildString {
+                appendLine("runtimeFamily=${runtimeTarget.runtimeFamily.name.lowercase()}")
+                appendLine("artifactId=${CryptoPrimitives.hex(model.buildId)}")
+                appendLine("bridgeClass=${model.bridge.internalClassName}")
+                appendLine("loaderClass=${model.bridge.loaderInternalClassName.orEmpty()}")
+                appendLine("gatewayNames=${model.bridge.methodNames.joinToString(",")}")
+                appendLine("vaultRecords=$protectedStringCount")
                 appendLine("resourcePath=${model.bridge.nativeLibraryResourcePath}")
                 appendLine("fileName=${model.bridge.nativeLibraryFileName}")
             },
         )
     }
 
-    private fun deterministicHex(label: ByteArray, byteCount: Int): String =
-        CryptoPrimitives.hex(deterministicBytes(label, buildId, byteCount))
+    private fun deterministicHex(label: ByteArray, byteCount: Int): String = deterministicBytes(label, buildId, byteCount).clearedAfter(CryptoPrimitives::hex)
 
     private fun deterministicBytes(label: ByteArray, context: ByteArray, size: Int): ByteArray {
         if (size == 0) {
@@ -279,16 +338,19 @@ internal class SecureVaultBuilder(
                     context,
                     CryptoPrimitives.intLe(counter),
                 )
-            val copyLength = minOf(block.size, size - written)
-            block.copyInto(output, written, 0, copyLength)
-            written += copyLength
+            try {
+                val copyLength = minOf(block.size, size - written)
+                block.copyInto(output, written, 0, copyLength)
+                written += copyLength
+            } finally {
+                block.fill(0)
+            }
             counter++
         }
         return output
     }
 
-    private fun rustByteArray(bytes: ByteArray): String =
-        bytes.joinToString(prefix = "[", postfix = "]") { byte -> "0x%02x".format(byte) }
+    private fun rustByteArray(bytes: ByteArray): String = bytes.joinToString(prefix = "[", postfix = "]") { byte -> "0x%02x".format(byte) }
 
     private fun compareBytes(left: ByteArray, right: ByteArray): Int {
         for (index in 0 until minOf(left.size, right.size)) {
@@ -300,6 +362,28 @@ internal class SecureVaultBuilder(
         return left.size.compareTo(right.size)
     }
 
+    override fun close() {
+        if (closed) return
+        closed = true
+        masterKey.fill(0)
+        buildId.fill(0)
+        moduleBytes.fill(0)
+        targetBytes.fill(0)
+        records.forEach { record ->
+            record.capability.fill(0)
+            record.nonce.fill(0)
+            record.ciphertext.fill(0)
+            record.padding.fill(0)
+            record.orderKey.fill(0)
+        }
+        records.clear()
+        capabilities.clear()
+    }
+
+    private fun checkOpen() {
+        check(!closed) { "SecureVaultBuilder is closed" }
+    }
+
     private fun DataOutputStream.writeIntLe(value: Int) {
         write(ByteBuffer.allocate(Int.SIZE_BYTES).order(ByteOrder.LITTLE_ENDIAN).putInt(value).array())
     }
@@ -309,30 +393,37 @@ internal class SecureVaultBuilder(
     }
 }
 
+private inline fun <T> ByteArray.clearedAfter(block: (ByteArray) -> T): T = try {
+    block(this)
+} finally {
+    fill(0)
+}
+
 internal const val GATEWAY_COUNT = 8
 internal const val VAULT_FILE_NAME = "vault.bin"
 internal const val RUST_CONFIG_FILE_NAME = "native_config.rs"
 internal const val RUNTIME_METADATA_FILE_NAME = "runtime.properties"
-internal val VAULT_MAGIC = byteArrayOf('S'.code.toByte(), 'G'.code.toByte(), 'V'.code.toByte(), '2'.code.toByte())
-internal const val VAULT_VERSION = 2
+internal val VAULT_MAGIC = byteArrayOf('S'.code.toByte(), 'G'.code.toByte(), 'V'.code.toByte(), '3'.code.toByte())
+internal const val VAULT_VERSION = 3
 private const val BUILD_ID_SIZE = 16
 private const val KEY_SIZE = 32
 private const val KEY_SHARE_COUNT = 4
 private const val CAPABILITY_SIZE = 16
 private const val NONCE_SIZE = 12
-private const val MAX_PLAINTEXT_SIZE = 60_000
-private val BUILD_ID_LABEL = CryptoPrimitives.utf8("strguard/v2/build-id")
-private val BUILD_KEY_LABEL = CryptoPrimitives.utf8("strguard/v2/build-key")
-private val CAPABILITY_LABEL = CryptoPrimitives.utf8("strguard/v2/capability")
-private val GATEWAY_LABEL = CryptoPrimitives.utf8("strguard/v2/gateway")
-private val RECORD_KEY_LABEL = CryptoPrimitives.utf8("strguard/v2/record-key")
-private val NONCE_LABEL = CryptoPrimitives.utf8("strguard/v2/nonce")
-private val PADDING_LABEL = CryptoPrimitives.utf8("strguard/v2/padding-length")
-private val PADDING_BYTES_LABEL = CryptoPrimitives.utf8("strguard/v2/padding-bytes")
-private val ORDER_LABEL = CryptoPrimitives.utf8("strguard/v2/order")
-private val BRIDGE_CLASS_LABEL = CryptoPrimitives.utf8("strguard/v2/bridge-class")
-private val METHOD_NAME_LABEL = CryptoPrimitives.utf8("strguard/v2/method-name")
-private val LIBRARY_NAME_LABEL = CryptoPrimitives.utf8("strguard/v2/library-name")
-private val KEY_SHARE_LABEL = CryptoPrimitives.utf8("strguard/v2/key-share")
-private val KEY_SHARE_MASK_LABEL = CryptoPrimitives.utf8("strguard/v2/key-share-mask")
-private val KEY_SHARE_ORDER_LABEL = CryptoPrimitives.utf8("strguard/v2/key-share-order")
+private const val MAX_PLAINTEXT_BYTES = 60_000
+private val BUILD_ID_LABEL = CryptoPrimitives.utf8("strguard/v3/build-id")
+private val BUILD_KEY_LABEL = CryptoPrimitives.utf8("strguard/v3/build-key")
+private val CAPABILITY_LABEL = CryptoPrimitives.utf8("strguard/v3/capability")
+private val GATEWAY_LABEL = CryptoPrimitives.utf8("strguard/v3/gateway")
+private val RECORD_KEY_LABEL = CryptoPrimitives.utf8("strguard/v3/record-key")
+private val NONCE_LABEL = CryptoPrimitives.utf8("strguard/v3/nonce")
+private val PADDING_LABEL = CryptoPrimitives.utf8("strguard/v3/padding-length")
+private val PADDING_BYTES_LABEL = CryptoPrimitives.utf8("strguard/v3/padding-bytes")
+private val ORDER_LABEL = CryptoPrimitives.utf8("strguard/v3/order")
+private val BRIDGE_CLASS_LABEL = CryptoPrimitives.utf8("strguard/v3/bridge-class")
+private val LOADER_CLASS_LABEL = CryptoPrimitives.utf8("strguard/v3/loader-class")
+private val METHOD_NAME_LABEL = CryptoPrimitives.utf8("strguard/v3/method-name")
+private val LIBRARY_NAME_LABEL = CryptoPrimitives.utf8("strguard/v3/library-name")
+private val KEY_SHARE_LABEL = CryptoPrimitives.utf8("strguard/v3/key-share")
+private val KEY_SHARE_MASK_LABEL = CryptoPrimitives.utf8("strguard/v3/key-share-mask")
+private val KEY_SHARE_ORDER_LABEL = CryptoPrimitives.utf8("strguard/v3/key-share-order")

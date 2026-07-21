@@ -6,8 +6,8 @@ import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.*
 import org.gradle.work.DisableCachingByDefault
-import java.io.IOException
 import java.nio.file.*
+import java.time.Duration
 import java.util.*
 
 @DisableCachingByDefault(because = "Native compiler reproducibility is validated separately per NDK toolchain")
@@ -23,7 +23,7 @@ abstract class BuildAndroidNativeRuntimeTask : DefaultTask() {
     abstract val nativeEnabled: Property<Boolean>
 
     @get:Input
-    abstract val targetTriple: Property<String>
+    abstract val abiName: Property<String>
 
     @get:Input
     abstract val minSdk: Property<Int>
@@ -43,6 +43,19 @@ abstract class BuildAndroidNativeRuntimeTask : DefaultTask() {
     @get:Input
     abstract val runtimeTemplateVersion: Property<String>
 
+    @get:Input
+    abstract val processTimeoutSeconds: Property<Long>
+
+    @get:Input
+    abstract val toolchainFingerprint: Property<String>
+
+    @get:Internal
+    abstract val processRegistry: Property<NativeProcessRegistryService>
+
+    init {
+        outputs.doNotCacheIf("StrGuard Android Native outputs contain build-specific key material") { true }
+    }
+
     @TaskAction
     fun build() {
         val output = outputDirectory.get().asFile.toPath()
@@ -51,10 +64,7 @@ abstract class BuildAndroidNativeRuntimeTask : DefaultTask() {
             return
         }
 
-        val nativeTarget = NativeTarget.fromRustTriple(targetTriple.get())
-        if (nativeTarget.extractFromResources) {
-            throw GradleException("Desktop Native targets cannot be built through an Android variant")
-        }
+        val abi = AndroidAbi.fromAbiName(abiName.get())
         val inputs = nativeInputDirectory.get().asFile.toPath().toAbsolutePath().normalize()
         val workspace = temporaryDir.toPath().resolve("native-runtime")
         val cargoTarget = temporaryDir.toPath().resolve("cargo-target")
@@ -67,8 +77,9 @@ abstract class BuildAndroidNativeRuntimeTask : DefaultTask() {
                 .resolve("toolchains/llvm/prebuilt")
                 .resolve(ndkHostTag.get())
                 .resolve("bin")
-        val linker = toolchain.resolve(androidLinkerName(minSdk.get(), ndkHostTag.get()))
-        val archiver = toolchain.resolve(androidArchiverName(ndkHostTag.get()))
+        val ndkHost = AndroidNdkHost.fromTag(ndkHostTag.get())
+        val linker = toolchain.resolve(ndkHost.clangExecutableName(abi, minSdk.get()))
+        val archiver = toolchain.resolve(ndkHost.executableName("llvm-ar"))
         if (!Files.isRegularFile(linker)) {
             throw GradleException("StrGuard cannot find Android NDK linker $linker")
         }
@@ -76,52 +87,61 @@ abstract class BuildAndroidNativeRuntimeTask : DefaultTask() {
             throw GradleException("StrGuard cannot find Android NDK archiver $archiver")
         }
 
-        val target = nativeTarget.rustTriple
-        val command =
-            listOf(
-                cargoExecutable.get(),
-                "build",
-                "--manifest-path",
-                workspace.resolve("Cargo.toml").toString(),
-                "--release",
-                "--locked",
-                "--target",
-                target,
+        val target = abi.rustTriple
+        val environment =
+            linkedMapOf(
+                "CARGO_TARGET_DIR" to cargoTarget.toAbsolutePath().toString(),
+                "CARGO_INCREMENTAL" to "0",
+                "SOURCE_DATE_EPOCH" to "0",
+                abi.cargoLinkerEnvKey to linker.toString(),
+                abi.cargoArchiverEnvKey to archiver.toString(),
+                "CC_${abi.cargoToolEnvironmentSuffix}" to linker.toString(),
+                "AR_${abi.cargoToolEnvironmentSuffix}" to archiver.toString(),
             )
-        val process =
-            try {
-                ProcessBuilder(command)
-                    .directory(workspace.toFile())
-                    .redirectErrorStream(true)
-                    .apply {
-                        environment()["STRGUARD_CONFIG_DIR"] = inputs.toString()
-                        environment()["CARGO_TARGET_DIR"] = cargoTarget.toAbsolutePath().toString()
-                        environment()["SOURCE_DATE_EPOCH"] = "0"
-                        environment()["CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER"] = linker.toString()
-                        environment()["CARGO_TARGET_AARCH64_LINUX_ANDROID_AR"] = archiver.toString()
-                        environment()["CC_aarch64_linux_android"] = linker.toString()
-                        environment()["AR_aarch64_linux_android"] = archiver.toString()
-                    }
-                    .start()
-            } catch (failure: IOException) {
-                throw GradleException(
-                    "StrGuard cannot start Cargo executable '${cargoExecutable.get()}' for Android target $target. " +
-                            "Install Rust and Cargo, then add the target with 'rustup target add $target'.",
-                    failure,
-                )
-            }
-        val processOutput = process.inputStream.bufferedReader().use { it.readText() }
-        val exitCode = process.waitFor()
-        if (exitCode != 0) {
+        addHostMsvcEnvironment(environment)
+        val manifest = workspace.resolve("Cargo.toml").toString()
+        try {
+            val runner = NativeProcessRunner(processRegistry.get())
+            runner.run(
+                command =
+                listOf(
+                    cargoExecutable.get(),
+                    "fetch",
+                    "--manifest-path",
+                    manifest,
+                    "--locked",
+                    "--offline",
+                    "--target",
+                    target,
+                ),
+                workingDirectory = workspace,
+                environment = nativeProcessEnvironment(environment),
+                timeout = Duration.ofSeconds(processTimeoutSeconds.get()),
+            )
+            copyNativeInputs(inputs, workspace.resolve("generated"))
+            runner.run(
+                command =
+                listOf(
+                    cargoExecutable.get(),
+                    "build",
+                    "--manifest-path",
+                    manifest,
+                    "--release",
+                    "--locked",
+                    "--offline",
+                    "--target",
+                    target,
+                ),
+                workingDirectory = workspace,
+                environment = nativeProcessEnvironment(environment),
+                timeout = Duration.ofSeconds(processTimeoutSeconds.get()),
+            )
+        } catch (failure: GradleException) {
             throw GradleException(
-                "StrGuard Android Rust runtime build failed for target $target " +
-                        "(command: ${command.joinToString(" ")}):\n$processOutput\n" +
-                        "Ensure Cargo and NDK ${ndkDirectory.get().asFile} are available, then run " +
-                        "'rustup target add $target'.",
+                "StrGuard Android Rust runtime build failed for target $target with NDK ${ndkVersion.get()}. " +
+                    "Ensure Cargo/NDK are available and run 'rustup target add $target'.",
+                failure,
             )
-        }
-        if (processOutput.isNotBlank()) {
-            logger.info(processOutput.trim())
         }
 
         val metadata = Properties()
@@ -130,14 +150,17 @@ abstract class BuildAndroidNativeRuntimeTask : DefaultTask() {
             ?: throw GradleException("StrGuard runtime metadata has no resourcePath")
         val fileName = metadata.getProperty("fileName")
             ?: throw GradleException("StrGuard runtime metadata has no fileName")
-        val expectedResourcePath = "${nativeTarget.resourceDirectory}/$fileName"
-        if (resourcePath != expectedResourcePath) {
+        if (metadata.getProperty("runtimeFamily") != "android") {
+            throw GradleException("StrGuard runtime metadata is not an Android runtime")
+        }
+        if (resourcePath != fileName) {
             throw GradleException(
-                "StrGuard Android runtime metadata target mismatch: expected $expectedResourcePath, got $resourcePath",
+                "StrGuard Android runtime metadata path mismatch: expected $fileName, got $resourcePath",
             )
         }
+        val expectedResourcePath = abi.packagedResourcePath(fileName)
         val compiledLibrary =
-            cargoTarget.resolve(target).resolve("release").resolve(nativeTarget.cargoLibraryFileName)
+            cargoTarget.resolve(target).resolve("release").resolve(abi.cargoLibraryFileName)
         if (!Files.isRegularFile(compiledLibrary)) {
             throw GradleException("Cargo did not produce $compiledLibrary")
         }
@@ -149,7 +172,16 @@ abstract class BuildAndroidNativeRuntimeTask : DefaultTask() {
     private fun copyRuntimeTemplate(destination: Path) {
         copyResource("Cargo.toml", destination.resolve("Cargo.toml"))
         copyResource("Cargo.lock", destination.resolve("Cargo.lock"))
+        copyResource("build.rs", destination.resolve("build.rs"))
         copyResource("src/lib.rs", destination.resolve("src/lib.rs"))
+        extractResourceArchive("vendor.zip", destination)
+    }
+
+    private fun copyNativeInputs(source: Path, destination: Path) {
+        Files.createDirectories(destination)
+        listOf("native_config.rs", "vault.bin").forEach { fileName ->
+            Files.copy(source.resolve(fileName), destination.resolve(fileName), StandardCopyOption.REPLACE_EXISTING)
+        }
     }
 
     private fun copyResource(relativePath: String, destination: Path) {
@@ -162,36 +194,12 @@ abstract class BuildAndroidNativeRuntimeTask : DefaultTask() {
         }
     }
 
-    private fun resetDirectory(directory: Path) {
-        directory.toFile().deleteRecursively()
-        Files.createDirectories(directory)
+    private fun extractResourceArchive(relativePath: String, destination: Path) {
+        val resourcePath = "strguard-native-runtime/$relativePath"
+        val resource = javaClass.classLoader.getResourceAsStream(resourcePath)
+            ?: throw GradleException("Missing bundled Rust runtime archive $resourcePath")
+        resource.use { input -> extractZip(input, destination) }
     }
 }
 
-internal fun androidNdkHostTag(osName: String, architecture: String): String {
-    val os = osName.lowercase()
-    val arch = architecture.lowercase()
-    return when {
-        os.startsWith("windows") && arch in X64_ARCHITECTURES -> "windows-x86_64"
-        os.startsWith("linux") && arch in X64_ARCHITECTURES -> "linux-x86_64"
-        (os.startsWith("mac") || os.startsWith("darwin")) &&
-                (arch in X64_ARCHITECTURES || arch in ARM64_ARCHITECTURES) -> "darwin-x86_64"
-
-        else -> throw IllegalArgumentException(
-            "Unsupported Android NDK host os.name='$osName', os.arch='$architecture'",
-        )
-    }
-}
-
-private fun androidLinkerName(minSdk: Int, hostTag: String): String =
-    "aarch64-linux-android${minSdk}-clang${windowsCommandSuffix(hostTag)}"
-
-private fun androidArchiverName(hostTag: String): String =
-    "llvm-ar${windowsExecutableSuffix(hostTag)}"
-
-private fun windowsCommandSuffix(hostTag: String): String = if (hostTag.startsWith("windows")) ".cmd" else ""
-
-private fun windowsExecutableSuffix(hostTag: String): String = if (hostTag.startsWith("windows")) ".exe" else ""
-
-private val X64_ARCHITECTURES = setOf("amd64", "x86_64", "x86-64")
-private val ARM64_ARCHITECTURES = setOf("aarch64", "arm64")
+internal fun androidNdkHostTag(osName: String, architecture: String): String = AndroidNdkHost.detect(osName, architecture).tag

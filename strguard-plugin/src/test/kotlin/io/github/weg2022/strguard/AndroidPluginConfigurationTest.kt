@@ -123,15 +123,53 @@ class AndroidPluginConfigurationTest {
     }
 
     @Test
-    fun `rejects ABI filters that exclude arm64-v8a`() {
+    fun `rejects ABI filters missing from configured androidAbis`() {
         val sdkDirectory = findAndroidSdk()
         assumeTrue(sdkDirectory != null, "Android SDK is not available for AGP integration testing")
-        writeContractProject(requireNotNull(sdkDirectory), abiFilters = setOf("x86_64"))
+        writeContractProject(
+            requireNotNull(sdkDirectory),
+            abiFilters = setOf("x86_64"),
+            androidAbis = setOf("arm64-v8a"),
+        )
 
         val result = runner("help").buildAndFail()
 
-        assertTrue(result.output.contains("supports arm64-v8a only"))
-        assertTrue(result.output.contains("defaultConfig configures x86_64"))
+        assertTrue(result.output.contains("defaultConfig ABI filters x86_64"))
+        assertTrue(result.output.contains("missing androidAbis x86_64"))
+    }
+
+    @Test
+    fun `rejects ABI split outputs missing from configured androidAbis`() {
+        val sdkDirectory = findAndroidSdk()
+        assumeTrue(sdkDirectory != null, "Android SDK is not available for AGP integration testing")
+        writeContractProject(
+            requireNotNull(sdkDirectory),
+            splitAbis = setOf("x86_64"),
+            androidAbis = setOf("arm64-v8a"),
+        )
+
+        val result = runner("help").buildAndFail()
+
+        assertTrue(result.output.contains("variant debug ABI split outputs x86_64"))
+        assertTrue(result.output.contains("missing androidAbis x86_64"))
+    }
+
+    @Test
+    fun `protects flavor-specific Android variant`() {
+        val sdkDirectory = findAndroidSdk()
+        assumeTrue(sdkDirectory != null, "Android SDK is not available for AGP integration testing")
+        writeContractProject(requireNotNull(sdkDirectory), withFlavor = true)
+
+        val result = runner("transformStrGuardDemoDebugClasses").build()
+
+        assertEquals(TaskOutcome.SUCCESS, result.task(":transformStrGuardDemoDebugClasses")?.outcome)
+        assertTrue(Files.isRegularFile(projectDirectory.resolve("build/strguard/native-input/demoDebug/vault.bin")))
+        val transformedJar = findTransformedJar("sample/contract/FlavorValue.class")
+        JarFile(transformedJar.toFile()).use { jar ->
+            val entry = assertNotNull(jar.getJarEntry("sample/contract/FlavorValue.class"))
+            val bytes = jar.getInputStream(entry).readBytes().toString(StandardCharsets.ISO_8859_1)
+            assertFalse(bytes.contains("flavor-sensitive-value"))
+        }
     }
 
     @Test
@@ -145,18 +183,28 @@ class AndroidPluginConfigurationTest {
             enabled = false,
         )
 
-        val result = runner("assembleDebug").build()
+        val result = runner("assembleDebug", "verifyDisabledStrGuardProviders").build()
 
         assertEquals(TaskOutcome.SUCCESS, result.task(":transformStrGuardDebugClasses")?.outcome)
         assertEquals(TaskOutcome.SUCCESS, result.task(":buildStrGuardDebugNative")?.outcome)
         assertEquals(TaskOutcome.SUCCESS, result.task(":assembleDebug")?.outcome)
+        assertEquals(TaskOutcome.SUCCESS, result.task(":verifyDisabledStrGuardProviders")?.outcome)
+        val report = Files.readString(projectDirectory.resolve("build/reports/strguard/debug/summary.txt"))
+        assertTrue(report.contains("schemaVersion=1"))
+        assertTrue(report.contains("enabled=false"))
+        assertTrue(report.contains("runtimeTarget=disabled"))
+        assertFalse(report.contains("disabled Android seed Provider was evaluated"))
+        assertFalse(result.output.contains("disabled Android ABI Provider was evaluated"))
     }
 
     private fun writeContractProject(
         sdkDirectory: Path,
         minSdk: Int = 21,
         abiFilters: Set<String> = emptySet(),
+        splitAbis: Set<String> = emptySet(),
+        androidAbis: Set<String> = AndroidAbi.entries.map(AndroidAbi::abiName).toSet(),
         enabled: Boolean = true,
+        withFlavor: Boolean = false,
     ) {
         writeFile(
             "settings.gradle.kts",
@@ -183,10 +231,37 @@ class AndroidPluginConfigurationTest {
             "src/main/AndroidManifest.xml",
             "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\" />",
         )
+        writeFile(
+            "src/main/java/sample/contract/FlavorValue.java",
+            """
+            package sample.contract;
+
+            public final class FlavorValue {
+                public static String reveal() {
+                    return "flavor-sensitive-value";
+                }
+            }
+            """.trimIndent(),
+        )
         val abiConfiguration = abiFilters.joinToString { "\"$it\"" }
+        val splitAbiConfiguration = splitAbis.joinToString { "\"$it\"" }
+        val strGuardAbiConfiguration = androidAbis.joinToString { "\"$it\"" }
+        val strGuardAbis =
+            if (enabled) {
+                "setOf($strGuardAbiConfiguration)"
+            } else {
+                """
+                providers.provider<Set<String>> {
+                    error("disabled Android ABI Provider was evaluated")
+                }
+                """.trimIndent()
+            }
         writeFile(
             "build.gradle.kts",
             """
+            import io.github.weg2022.strguard.BuildAndroidNativeRuntimeTask
+            import io.github.weg2022.strguard.TransformAndroidClassesTask
+
             plugins {
                 id("com.android.application") version "8.13.2"
                 id("io.github.weg2022.strguard")
@@ -200,20 +275,100 @@ class AndroidPluginConfigurationTest {
                     minSdk = $minSdk
                     ${if (abiFilters.isEmpty()) "" else "ndk.abiFilters += setOf($abiConfiguration)"}
                 }
+                ${
+                if (withFlavor) {
+                    """
+                    flavorDimensions += "tier"
+                    productFlavors {
+                        create("demo") {
+                            dimension = "tier"
+                        }
+                    }
+                    """.trimIndent()
+                } else {
+                    ""
+                }
+            }
+                ${
+                if (splitAbis.isEmpty()) {
+                    ""
+                } else {
+                    """
+                    splits {
+                        abi {
+                            isEnable = true
+                            reset()
+                            include($splitAbiConfiguration)
+                        }
+                    }
+                    """.trimIndent()
+                }
+            }
             }
 
             strGuard {
                 enabled.set($enabled)
+                androidAbis.set($strGuardAbis)
+                ${
+                if (enabled) {
+                    """
+                    releaseSeedHex.set("$ANDROID_TEST_SEED")
+                    stringGuardPackages.set(listOf("sample"))
+                    """.trimIndent()
+                } else {
+                    """
+                    releaseSeedHex.set(providers.provider<String> {
+                        error("disabled Android seed Provider was evaluated")
+                    })
+                    targetTriple.set(providers.provider<String> {
+                        error("disabled Android target Provider was evaluated")
+                    })
+                    """.trimIndent()
+                }
+            }
+            }
+
+            ${
+                if (enabled) {
+                    ""
+                } else {
+                    """
+                    tasks.register("verifyDisabledStrGuardProviders") {
+                        doLast {
+                            project.tasks.named<TransformAndroidClassesTask>("transformStrGuardDebugClasses").get()
+                                .let { task ->
+                                    check(task.releaseSeedHex.get() == "disabled")
+                                    check(task.releaseSeedFingerprint.get() == "disabled")
+                                    check(task.group == "strguard")
+                                    check(!task.description.isNullOrBlank())
+                                }
+                            project.tasks.named<BuildAndroidNativeRuntimeTask>("buildStrGuardDebugArm64V8aNative").get()
+                                .let { task ->
+                                    check(task.abiName.get() == "arm64-v8a")
+                                    check(task.ndkHostTag.get() == "disabled")
+                                    check(task.ndkVersion.get() == "disabled")
+                                    check(task.cargoExecutable.get() == "disabled")
+                                    check(task.ndkDirectory.get().asFile.name == "disabled-ndk")
+                                    check(task.group == "strguard")
+                                    check(!task.description.isNullOrBlank())
+                                }
+                            project.tasks.getByName("buildStrGuardDebugNative").let { task ->
+                                check(task.group == "strguard")
+                                check(!task.description.isNullOrBlank())
+                            }
+                        }
+                    }
+                    """.trimIndent()
+                }
             }
             """.trimIndent(),
         )
     }
 
-    private fun runner(vararg arguments: String): GradleRunner =
-        GradleRunner.create()
-            .withProjectDir(projectDirectory.toFile())
-            .withArguments(*arguments, "--stacktrace")
-            .forwardOutput()
+    private fun runner(vararg arguments: String): GradleRunner = GradleRunner.create()
+        .withProjectDir(projectDirectory.toFile())
+        .withArguments(*arguments, "--stacktrace")
+        .forwardOutput()
 
     private fun writeFile(relativePath: String, contents: String) {
         val file = projectDirectory.resolve(relativePath)
@@ -221,20 +376,18 @@ class AndroidPluginConfigurationTest {
         Files.writeString(file, contents, StandardCharsets.UTF_8)
     }
 
-    private fun findTransformedJar(requiredEntry: String): Path =
-        Files.walk(projectDirectory.resolve("build")).use { paths ->
-            paths.filter { Files.isRegularFile(it) && it.fileName.toString().endsWith(".jar") }
-                .filter { candidate ->
-                    runCatching {
-                        JarFile(candidate.toFile()).use { jar -> jar.getJarEntry(requiredEntry) != null }
-                    }.getOrDefault(false)
-                }
-                .findFirst()
-                .orElseThrow { AssertionError("No transformed Android classes JAR contains $requiredEntry") }
-        }
+    private fun findTransformedJar(requiredEntry: String): Path = Files.walk(projectDirectory.resolve("build")).use { paths ->
+        paths.filter { Files.isRegularFile(it) && it.fileName.toString().endsWith(".jar") }
+            .filter { candidate ->
+                runCatching {
+                    JarFile(candidate.toFile()).use { jar -> jar.getJarEntry(requiredEntry) != null }
+                }.getOrDefault(false)
+            }
+            .findFirst()
+            .orElseThrow { AssertionError("No transformed Android classes JAR contains $requiredEntry") }
+    }
 
-    private fun projectRootPath(): String =
-        Path.of(System.getProperty("user.dir")).toAbsolutePath().normalize().toString().replace("\\", "\\\\")
+    private fun projectRootPath(): String = Path.of(System.getProperty("user.dir")).toAbsolutePath().normalize().toString().replace("\\", "\\\\")
 }
 
 private fun findAndroidSdk(): Path? {

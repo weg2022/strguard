@@ -1,0 +1,144 @@
+name: Android Device Farm
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "43 4 * * 1"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: android-device-farm-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  STRGUARD_RELEASE_SEED_HEX: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  ANDROID_NDK_VERSION: 27.2.12479018
+  RUST_TOOLCHAIN: 1.94.1
+
+jobs:
+  validate-matrix:
+    name: Validate Firebase device matrix
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require four actual ABIs and API floor/modern coverage
+        env:
+          DEVICE_MATRIX: ${{ vars.FIREBASE_DEVICE_MATRIX_JSON }}
+        run: |
+          test -n "${DEVICE_MATRIX}"
+          jq -e '
+            type == "object" and
+            (.include | type == "array" and length == 4) and
+            ([.include[].abi] | sort == ["arm64-v8a", "armeabi-v7a", "x86", "x86_64"]) and
+            ([.include[].abi] | unique | length == 4) and
+            all(.include[]; (.device | type == "string" and length > 0)) and
+            any(.include[]; .api == 21) and
+            any(.include[]; .api >= 34)
+          ' <<<"${DEVICE_MATRIX}"
+
+  build:
+    name: Build minified ABI split app and instrumentation APKs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+      - run: >-
+          sdkmanager "platforms;android-34" "build-tools;34.0.0"
+          "ndk;${ANDROID_NDK_VERSION}"
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: armv7-linux-androideabi,aarch64-linux-android,i686-linux-android,x86_64-linux-android
+      - uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6
+      - name: Build APKs
+        run: >-
+          bash ./gradlew -p samples/kotlin-android-application
+          assembleRelease assembleReleaseAndroidTest --stacktrace
+      - name: Create and sign tampered split APKs
+        shell: bash
+        run: |
+          mkdir -p tampered-apks
+          for apk in samples/kotlin-android-application/build/outputs/apk/release/*-release.apk; do
+            name=$(basename "${apk}" .apk)
+            unsigned="tampered-apks/${name}-tampered-unsigned.apk"
+            aligned="tampered-apks/${name}-tampered-aligned.apk"
+            signed="tampered-apks/${name}-tampered.apk"
+            python .github/scripts/create-tampered-apk.py "${apk}" "${unsigned}"
+            "${ANDROID_HOME}/build-tools/34.0.0/zipalign" -f 4 "${unsigned}" "${aligned}"
+            "${ANDROID_HOME}/build-tools/34.0.0/apksigner" sign \
+              --ks "${HOME}/.android/debug.keystore" \
+              --ks-key-alias androiddebugkey \
+              --ks-pass pass:android \
+              --key-pass pass:android \
+              --out "${signed}" \
+              "${aligned}"
+            "${ANDROID_HOME}/build-tools/34.0.0/apksigner" verify "${signed}"
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: strguard-android-test-apks
+          if-no-files-found: error
+          retention-days: 3
+          path: |
+            samples/kotlin-android-application/build/outputs/apk/release/*-release.apk
+            samples/kotlin-android-application/build/outputs/apk/androidTest/release/*-release-androidTest.apk
+            tampered-apks/*-release-tampered.apk
+
+  test:
+    name: Firebase ${{ matrix.abi }}
+    needs: [validate-matrix, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(vars.FIREBASE_DEVICE_MATRIX_JSON) }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: strguard-android-test-apks
+          path: apks
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_TEST_LAB_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+      - name: Run instrumentation on Firebase Test Lab
+        shell: bash
+        run: |
+          mapfile -t app_apks < <(find apks -name "*-${{ matrix.abi }}-release.apk" -print)
+          mapfile -t tampered_apks < <(find apks -name "*-${{ matrix.abi }}-release-tampered.apk" -print)
+          mapfile -t test_apks < <(find apks -name '*-release-androidTest.apk' -print)
+          test "${#app_apks[@]}" -eq 1
+          test "${#tampered_apks[@]}" -eq 1
+          test "${#test_apks[@]}" -eq 1
+          app_apk=${app_apks[0]}
+          tampered_apk=${tampered_apks[0]}
+          test_apk=${test_apks[0]}
+          gcloud config set project "${{ vars.FIREBASE_PROJECT_ID }}"
+          gcloud firebase test android run \
+            --type instrumentation \
+            --app "${app_apk}" \
+            --test "${test_apk}" \
+            --device "${{ matrix.device }}" \
+            --environment-variables "expectedAbi=${{ matrix.abi }}" \
+            --use-orchestrator \
+            --timeout 15m \
+            --client-details "matrixLabel=StrGuard-${GITHUB_SHA}-${{ matrix.abi }}"
+          gcloud firebase test android run \
+            --type instrumentation \
+            --app "${tampered_apk}" \
+            --test "${test_apk}" \
+            --device "${{ matrix.device }}" \
+            --environment-variables "expectedAbi=${{ matrix.abi }},expectTamper=true" \
+            --use-orchestrator \
+            --timeout 15m \
+            --client-details "matrixLabel=StrGuard-tamper-${GITHUB_SHA}-${{ matrix.abi }}"

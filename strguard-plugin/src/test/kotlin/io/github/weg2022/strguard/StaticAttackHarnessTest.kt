@@ -26,7 +26,7 @@ class StaticAttackHarnessTest {
                 TEST_RELEASE_SEED,
                 "io.github.weg2022:attack-fixture::attack-fixture",
                 CryptoPrimitives.sha256(originalClass),
-                NativeTarget.WINDOWS_X64,
+                JvmNativeTarget.WINDOWS_X64,
             )
         val transformed =
             ClassTransformer.transform(
@@ -42,7 +42,8 @@ class StaticAttackHarnessTest {
                 ),
                 vaultBuilder,
             )
-        vaultBuilder.writeNativeInputs(temporaryDirectory)
+        vaultBuilder.writeNativeInputs(temporaryDirectory).close()
+        vaultBuilder.close()
         val vault = Files.readAllBytes(temporaryDirectory.resolve(VAULT_FILE_NAME))
 
         assertTrue(LegacyBytecodeAttacker.recover(transformed.bytes).isEmpty())
@@ -80,8 +81,11 @@ private class LegacyArrayInterpreter(
     override fun visitInsn(opcode: Int) {
         when (opcode) {
             Opcodes.ICONST_M1 -> stack.addLast(-1)
+
             in Opcodes.ICONST_0..Opcodes.ICONST_5 -> stack.addLast(opcode - Opcodes.ICONST_0)
+
             Opcodes.DUP -> stack.addLast(stack.peekLast())
+
             Opcodes.BASTORE -> {
                 val value = stack.removeLast() as Int
                 val index = stack.removeLast() as Int
@@ -94,6 +98,7 @@ private class LegacyArrayInterpreter(
     override fun visitIntInsn(opcode: Int, operand: Int) {
         when (opcode) {
             Opcodes.BIPUSH, Opcodes.SIPUSH -> stack.addLast(operand)
+
             Opcodes.NEWARRAY -> {
                 check(operand == Opcodes.T_BYTE)
                 stack.addLast(ByteArray(stack.removeLast() as Int))
@@ -161,10 +166,9 @@ private fun plaintextClass(plaintext: String): ByteArray {
     return writer.toByteArray()
 }
 
-private fun newClassWriter(): ClassWriter =
-    ClassWriter(ClassWriter.COMPUTE_MAXS).apply {
-        visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, "sample/Secrets", null, "java/lang/Object", null)
-    }
+private fun newClassWriter(): ClassWriter = ClassWriter(ClassWriter.COMPUTE_MAXS).apply {
+    visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, "sample/Secrets", null, "java/lang/Object", null)
+}
 
 private fun pushByteArray(method: MethodVisitor, bytes: ByteArray) {
     method.visitLdcInsn(bytes.size)
@@ -177,8 +181,7 @@ private fun pushByteArray(method: MethodVisitor, bytes: ByteArray) {
     }
 }
 
-private fun xor(value: ByteArray, key: ByteArray): ByteArray =
-    ByteArray(value.size) { index -> (value[index].toInt() xor key[index % key.size].toInt()).toByte() }
+private fun xor(value: ByteArray, key: ByteArray): ByteArray = ByteArray(value.size) { index -> (value[index].toInt() xor key[index % key.size].toInt()).toByte() }
 
 private fun ByteArray.asText(): String = toString(StandardCharsets.ISO_8859_1)
 

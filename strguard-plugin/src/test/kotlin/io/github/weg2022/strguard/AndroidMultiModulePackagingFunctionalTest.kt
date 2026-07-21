@@ -4,9 +4,11 @@ import org.gradle.testkit.runner.GradleRunner
 import org.gradle.testkit.runner.TaskOutcome
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.io.TempDir
+import java.io.ByteArrayInputStream
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.Properties
 import java.util.jar.JarInputStream
 import java.util.zip.ZipFile
 import kotlin.test.*
@@ -102,11 +104,11 @@ class AndroidMultiModulePackagingFunctionalTest {
                 ndkVersion = ndkVersion,
                 minifiedRelease = minifiedRelease,
                 extraConfiguration =
-                    """
+                """
                     dependencies {
                         implementation(project(":library"))
                     }
-                    """.trimIndent(),
+                """.trimIndent(),
             ),
         )
         writeFile(
@@ -187,14 +189,18 @@ class AndroidMultiModulePackagingFunctionalTest {
             }
 
             ${
-            if (minifiedRelease) """
+            if (minifiedRelease) {
+                """
             buildTypes {
                 release {
                     isMinifyEnabled = true
                     proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
                 }
             }
-            """.trimIndent() else ""
+                """.trimIndent()
+            } else {
+                ""
+            }
         }
         }
 
@@ -213,15 +219,34 @@ class AndroidMultiModulePackagingFunctionalTest {
         ZipFile(aar.toFile()).use { archive ->
             val classesEntry = assertNotNull(archive.getEntry("classes.jar"))
             JarInputStream(archive.getInputStream(classesEntry)).use { classes ->
-                val entries = generateSequence { classes.nextJarEntry }.map { it.name }.toList()
+                val entries = mutableListOf<String>()
+                val markers = mutableListOf<Properties>()
+                while (true) {
+                    val entry = classes.nextJarEntry ?: break
+                    entries += entry.name
+                    if (entry.name.startsWith("META-INF/strguard/artifacts/") && entry.name.endsWith(".properties")) {
+                        markers += Properties().apply { load(ByteArrayInputStream(classes.readBytes())) }
+                    }
+                }
                 assertTrue("sample/library/ProtectedLibrary.class" in entries)
                 assertTrue(entries.any { it.startsWith("io/github/weg2022/strguard/generated/B") })
                 assertFalse(entries.any { it.startsWith("io/github/weg2022/strguard/annotation/") })
+                assertEquals(if (nativeBuildEnabled) 1 else 0, markers.size)
+                markers.singleOrNull()?.let { marker ->
+                    assertEquals("android", marker.getProperty("runtimeFamily"))
+                    assertEquals("21", marker.getProperty("minSdk"))
+                    assertEquals(
+                        AndroidAbi.entries.map(AndroidAbi::abiName).sorted().joinToString(","),
+                        marker.getProperty("androidAbis"),
+                    )
+                }
             }
             val nativeEntries = archive.entries().asSequence().filter {
-                it.name.startsWith("jni/arm64-v8a/libsg_") && it.name.endsWith(".so")
+                AndroidAbi.entries.any { abi ->
+                    it.name.startsWith("jni/${abi.abiName}/libsg_") && it.name.endsWith(".so")
+                }
             }.toList()
-            assertEquals(if (nativeBuildEnabled) 1 else 0, nativeEntries.size)
+            assertEquals(if (nativeBuildEnabled) AndroidAbi.entries.size else 0, nativeEntries.size)
             val consumerRules = archive.entries().asSequence()
                 .filter { it.name.contains("proguard", ignoreCase = true) || it.name.endsWith(".pro") }
                 .any { entry ->
@@ -246,9 +271,11 @@ class AndroidMultiModulePackagingFunctionalTest {
                 assertFalse(contents.contains("android-library-sensitive-value"))
             }
             val nativeEntries = archive.entries().asSequence().filter {
-                it.name.startsWith("lib/arm64-v8a/libsg_") && it.name.endsWith(".so")
+                AndroidAbi.entries.any { abi ->
+                    it.name.startsWith("lib/${abi.abiName}/libsg_") && it.name.endsWith(".so")
+                }
             }.toList()
-            assertEquals(if (nativeBuildEnabled) 2 else 0, nativeEntries.size)
+            assertEquals(if (nativeBuildEnabled) AndroidAbi.entries.size * 2 else 0, nativeEntries.size)
         }
     }
 
@@ -265,8 +292,8 @@ class AndroidMultiModulePackagingFunctionalTest {
             val config = Files.readString(
                 projectDirectory.resolve("$module/build/strguard/native-input/release/native_config.rs"),
             )
-            val generatedNames = Regex("\"([^\"]+)\"").findAll(config).map { it.groupValues[1] }.take(5).toList()
-            assertEquals(5, generatedNames.size)
+            val generatedNames = Regex("\"([^\"]+)\"").findAll(config).map { it.groupValues[1] }.take(9).toList()
+            assertEquals(9, generatedNames.size)
             val bridgeClass = generatedNames.first()
             assertTrue(dexText.contains(bridgeClass), "R8 renamed or removed generated bridge $bridgeClass")
             generatedNames.drop(1).forEach { methodName ->
@@ -275,18 +302,16 @@ class AndroidMultiModulePackagingFunctionalTest {
         }
     }
 
-    private fun findArtifact(directory: Path, extension: String): Path =
-        Files.walk(directory).use { paths ->
-            paths.filter { Files.isRegularFile(it) && it.fileName.toString().endsWith(extension) }
-                .findFirst()
-                .orElseThrow { AssertionError("No $extension artifact found under $directory") }
-        }
+    private fun findArtifact(directory: Path, extension: String): Path = Files.walk(directory).use { paths ->
+        paths.filter { Files.isRegularFile(it) && it.fileName.toString().endsWith(extension) }
+            .findFirst()
+            .orElseThrow { AssertionError("No $extension artifact found under $directory") }
+    }
 
-    private fun runner(vararg arguments: String): GradleRunner =
-        GradleRunner.create()
-            .withProjectDir(projectDirectory.toFile())
-            .withArguments(*arguments, "--stacktrace")
-            .forwardOutput()
+    private fun runner(vararg arguments: String): GradleRunner = GradleRunner.create()
+        .withProjectDir(projectDirectory.toFile())
+        .withArguments(*arguments, "--stacktrace")
+        .forwardOutput()
 
     private fun writeFile(relativePath: String, contents: String) {
         val file = projectDirectory.resolve(relativePath)
@@ -294,8 +319,7 @@ class AndroidMultiModulePackagingFunctionalTest {
         Files.writeString(file, contents, StandardCharsets.UTF_8)
     }
 
-    private fun projectRootPath(): String =
-        Path.of(System.getProperty("user.dir")).toAbsolutePath().normalize().toString().replace("\\", "\\\\")
+    private fun projectRootPath(): String = Path.of(System.getProperty("user.dir")).toAbsolutePath().normalize().toString().replace("\\", "\\\\")
 }
 
 private fun findAndroidPackagingSdk(): Path? {

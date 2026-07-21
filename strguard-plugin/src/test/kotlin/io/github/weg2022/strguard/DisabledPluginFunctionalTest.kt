@@ -1,5 +1,6 @@
 package io.github.weg2022.strguard
 
+import org.gradle.testfixtures.ProjectBuilder
 import org.gradle.testkit.runner.GradleRunner
 import org.gradle.testkit.runner.TaskOutcome
 import org.junit.jupiter.api.io.TempDir
@@ -15,11 +16,33 @@ class DisabledPluginFunctionalTest {
     lateinit var projectDirectory: Path
 
     @Test
+    fun `conditional Provider does not query the disabled branch`() {
+        val project = ProjectBuilder.builder().build()
+        var enabledValueQueries = 0
+        val value =
+            strGuardProvider(
+                enabled = project.providers.provider { false },
+                enabledValue =
+                project.providers.provider {
+                    enabledValueQueries++
+                    "enabled"
+                },
+                disabledValue = project.providers.provider { DISABLED_STRGUARD_VALUE },
+            )
+
+        assertEquals(DISABLED_STRGUARD_VALUE, value.get())
+        assertEquals(0, enabledValueQueries)
+    }
+
+    @Test
     fun `disabled plugin copies classes without seed target or Native toolchain`() {
         writeFile("settings.gradle.kts", "rootProject.name = \"disabled-consumer\"")
         writeFile(
             "build.gradle.kts",
             """
+            import io.github.weg2022.strguard.BuildNativeRuntimeTask
+            import io.github.weg2022.strguard.TransformClassesTask
+
             plugins {
                 java
                 id("io.github.weg2022.strguard")
@@ -28,8 +51,42 @@ class DisabledPluginFunctionalTest {
             strGuard {
                 enabled.set(false)
                 removeMetadata.set(true)
-                targetTriple.set("not-a-real-rust-target")
+                releaseSeedHex.set(providers.provider<String> {
+                    error("disabled release seed Provider was evaluated")
+                })
+                targetTriple.set(providers.provider<String> {
+                    error("disabled target Provider was evaluated")
+                })
+                stringGuardPackages.set(providers.provider<List<String>> {
+                    error("disabled string selector Provider was evaluated")
+                })
+                keepStringPackages.set(providers.provider<List<String>> {
+                    error("disabled keep selector Provider was evaluated")
+                })
                 consoleOutput.set(true)
+            }
+
+            tasks.register("verifyStrGuardTaskMetadata") {
+                doLast {
+                    listOf(
+                        "prepareStrGuardSupportClasses",
+                        "transformStrGuardMain",
+                        "buildStrGuardNativeMain",
+                    ).forEach { taskName ->
+                        val publicTask = project.tasks.getByName(taskName)
+                        check(publicTask.group == "strguard") { "${'$'}taskName has no StrGuard task group" }
+                        check(!publicTask.description.isNullOrBlank()) { "${'$'}taskName has no description" }
+                    }
+                    project.tasks.named<TransformClassesTask>("transformStrGuardMain").get().let { task ->
+                        check(task.releaseSeedHex.get() == "disabled")
+                        check(task.releaseSeedFingerprint.get() == "disabled")
+                        check(task.targetTriple.get() == "disabled")
+                    }
+                    project.tasks.named<BuildNativeRuntimeTask>("buildStrGuardNativeMain").get().let { task ->
+                        check(task.targetTriple.get() == "disabled")
+                        check(task.cargoExecutable.get() == "disabled")
+                    }
+                }
             }
             """.trimIndent(),
         )
@@ -46,16 +103,30 @@ class DisabledPluginFunctionalTest {
             """.trimIndent(),
         )
 
-        val result = runner("jar", "--info").build()
+        val result = runner("jar", "verifyStrGuardTaskMetadata", "--info").build()
 
         assertEquals(TaskOutcome.SUCCESS, result.task(":transformStrGuardMain")?.outcome)
         assertEquals(TaskOutcome.SUCCESS, result.task(":buildStrGuardNativeMain")?.outcome)
+        assertEquals(TaskOutcome.SUCCESS, result.task(":verifyStrGuardTaskMetadata")?.outcome)
         assertTrue(result.output.contains("protected 0 call sites"))
         val originalClass = projectDirectory.resolve("build/classes/java/main/sample/DisabledExample.class")
         val transformedClass = projectDirectory.resolve("build/strguard/classes/main/sample/DisabledExample.class")
         assertContentEquals(Files.readAllBytes(originalClass), Files.readAllBytes(transformedClass))
         assertEquals(
-            "protectedStrings=0\nremovedMetadata=0\n",
+            """
+            schemaVersion=1
+            enabled=false
+            runtimeTarget=disabled
+            inputClasses=1
+            eligibleClasses=0
+            matchedClasses=0
+            skippedClasses=0
+            protectedStrings=0
+            removedMetadata=0
+            unmatchedKeepStringPackages=
+            unmatchedKeepMetadataPackages=
+
+            """.trimIndent(),
             Files.readString(projectDirectory.resolve("build/reports/strguard/main/summary.txt")),
         )
         assertDirectoryEmpty(projectDirectory.resolve("build/strguard/native-input/main"))
@@ -69,7 +140,7 @@ class DisabledPluginFunctionalTest {
             assertFalse(
                 jar.entries().asSequence().any {
                     it.name.startsWith("io/github/weg2022/strguard/generated/") ||
-                            it.name.startsWith("META-INF/strguard/native/")
+                        it.name.startsWith("META-INF/strguard/native/")
                 },
             )
         }
@@ -80,12 +151,11 @@ class DisabledPluginFunctionalTest {
         Files.list(directory).use { files -> assertEquals(0L, files.count()) }
     }
 
-    private fun runner(vararg arguments: String): GradleRunner =
-        GradleRunner.create()
-            .withProjectDir(projectDirectory.toFile())
-            .withPluginClasspath()
-            .withArguments(*arguments, "--stacktrace")
-            .forwardOutput()
+    private fun runner(vararg arguments: String): GradleRunner = GradleRunner.create()
+        .withProjectDir(projectDirectory.toFile())
+        .withPluginClasspath()
+        .withArguments(*arguments, "--stacktrace")
+        .forwardOutput()
 
     private fun writeFile(relativePath: String, contents: String) {
         val file = projectDirectory.resolve(relativePath)

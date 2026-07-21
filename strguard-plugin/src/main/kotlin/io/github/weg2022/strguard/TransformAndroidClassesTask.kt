@@ -24,6 +24,10 @@ import java.util.zip.ZipEntry
 
 @DisableCachingByDefault(because = "Outputs contain build-specific seed-derived Native key material")
 abstract class TransformAndroidClassesTask : DefaultTask() {
+    init {
+        outputs.doNotCacheIf("Outputs contain build-specific seed-derived Native key material") { true }
+    }
+
     @get:InputFiles
     @get:PathSensitive(PathSensitivity.RELATIVE)
     abstract val inputJars: ListProperty<RegularFile>
@@ -52,9 +56,6 @@ abstract class TransformAndroidClassesTask : DefaultTask() {
 
     @get:Input
     abstract val moduleIdentity: Property<String>
-
-    @get:Input
-    abstract val targetTriple: Property<String>
 
     @get:Input
     abstract val java9StringConcatEnabled: Property<Boolean>
@@ -90,59 +91,96 @@ abstract class TransformAndroidClassesTask : DefaultTask() {
                 keepMetadataPackages = keepMetadataPackages.get(),
             )
         val entries = collectEntries()
-        val nativeInputs = nativeInputDirectory.get().asFile.toPath()
-        val reports = reportDirectory.get().asFile.toPath()
+        val output = outputJar.get().asFile.toPath()
+        val nativeInputsOutput = nativeInputDirectory.get().asFile.toPath()
+        val reportsOutput = reportDirectory.get().asFile.toPath()
+        val stagingRoot = temporaryDir.toPath().resolve("atomic-output")
+        resetDirectory(stagingRoot)
+        val stagedOutput = stagingRoot.resolve("classes.jar")
+        val nativeInputs = stagingRoot.resolve("native-input")
+        val reports = stagingRoot.resolve("reports")
         resetDirectory(nativeInputs)
         resetDirectory(reports)
+        val classEntries = entries.filterKeys { entryName -> entryName.endsWith(CLASS_SUFFIX) }
+        val classNames =
+            if (settings.enabled) {
+                classEntries.values.map { classBytes -> ClassReader(classBytes).className }
+            } else {
+                emptyList()
+            }
+        val selection = settings.analyzeClasses(classNames, classEntries.size)
+        selection.warningMessages().forEach(logger::warn)
         if (!settings.enabled) {
-            writeOutputJar(entries)
-            writeReport(reports, protectedStrings = 0, removedMetadata = 0)
+            writeOutputJar(entries, stagedOutput)
+            writeReport(
+                reports,
+                TransformReport(
+                    enabled = false,
+                    runtimeTarget = DISABLED_STRGUARD_VALUE,
+                    selection = selection,
+                    protectedStrings = 0,
+                    removedMetadata = 0,
+                ),
+            )
+            commitOutputs(stagedOutput, output, nativeInputs, nativeInputsOutput, reports, reportsOutput)
             logSummary(protectedStrings = 0, removedMetadata = 0)
             return
         }
 
         val inputDigest = digestInputs(entries)
-        val nativeTarget = NativeTarget.fromRustTriple(targetTriple.get())
-        check(!nativeTarget.extractFromResources) {
-            "Android class transforms require an Android Native target"
-        }
         val vaultBuilder =
-            SecureVaultBuilder(
-                validatedSeed(),
-                moduleIdentity.get(),
-                inputDigest,
-                nativeTarget,
-            )
-        val metadataMappings = linkedSetOf<String>()
-        val outputEntries = TreeMap<String, ByteArray>()
-        entries.forEach { (entryName, originalBytes) ->
-            val outputBytes =
-                if (entryName.endsWith(CLASS_SUFFIX)) {
-                    val className = ClassReader(originalBytes).className
-                    if (settings.shouldTransformClass(className)) {
-                        val result = ClassTransformer.transform(originalBytes, settings, vaultBuilder)
-                        metadataMappings.addAll(result.metadataMappings)
-                        result.bytes
+            try {
+                SecureVaultBuilder(
+                    validatedSeed(),
+                    moduleIdentity.get(),
+                    inputDigest,
+                    AndroidVaultTarget,
+                )
+            } finally {
+                inputDigest.fill(0)
+            }
+        vaultBuilder.use { builder ->
+            val metadataMappings = linkedSetOf<String>()
+            val outputEntries = TreeMap<String, ByteArray>()
+            entries.forEach { (entryName, originalBytes) ->
+                val outputBytes =
+                    if (entryName.endsWith(CLASS_SUFFIX)) {
+                        val className = ClassReader(originalBytes).className
+                        if (settings.shouldTransformClass(className)) {
+                            val result = ClassTransformer.transform(originalBytes, settings, builder)
+                            metadataMappings.addAll(result.metadataMappings)
+                            result.bytes
+                        } else {
+                            originalBytes
+                        }
                     } else {
                         originalBytes
                     }
-                } else {
-                    originalBytes
-                }
-            outputEntries[entryName] = outputBytes
-        }
+                outputEntries[entryName] = outputBytes
+            }
 
-        addSupportClasses(outputEntries, vaultBuilder)
-        vaultBuilder.writeNativeInputs(nativeInputs)
-        writeOutputJar(outputEntries)
-        writeReport(reports, vaultBuilder.protectedStringCount, metadataMappings.size)
-        logSummary(vaultBuilder.protectedStringCount, metadataMappings.size)
+            addSupportClasses(outputEntries, builder)
+            builder.writeNativeInputs(nativeInputs).close()
+            writeOutputJar(outputEntries, stagedOutput)
+            writeReport(
+                reports,
+                TransformReport(
+                    enabled = true,
+                    runtimeTarget = AndroidVaultTarget.vaultIdentity,
+                    selection = selection,
+                    protectedStrings = builder.protectedStringCount,
+                    removedMetadata = metadataMappings.size,
+                ),
+            )
+            commitOutputs(stagedOutput, output, nativeInputs, nativeInputsOutput, reports, reportsOutput)
+            logSummary(builder.protectedStringCount, metadataMappings.size)
+        }
     }
 
-    private fun writeReport(reports: Path, protectedStrings: Int, removedMetadata: Int) {
+    private fun writeReport(reports: Path, report: TransformReport) {
         Files.writeString(
             reports.resolve("summary.txt"),
-            "protectedStrings=$protectedStrings\nremovedMetadata=$removedMetadata\n",
+            report.asPropertiesText(),
             StandardCharsets.UTF_8,
         )
     }
@@ -151,7 +189,7 @@ abstract class TransformAndroidClassesTask : DefaultTask() {
         if (consoleOutput.get()) {
             logger.lifecycle(
                 "StrGuard 2 protected $protectedStrings Android call sites and removed " +
-                        "$removedMetadata metadata annotations",
+                    "$removedMetadata metadata annotations",
             )
         }
     }
@@ -225,8 +263,7 @@ abstract class TransformAndroidClassesTask : DefaultTask() {
         }
     }
 
-    private fun writeOutputJar(entries: Map<String, ByteArray>) {
-        val output = outputJar.get().asFile.toPath()
+    private fun writeOutputJar(entries: Map<String, ByteArray>, output: Path) {
         Files.createDirectories(output.parent)
         JarOutputStream(BufferedOutputStream(Files.newOutputStream(output))).use { jar ->
             entries.forEach { (entryName, bytes) ->
@@ -250,12 +287,21 @@ abstract class TransformAndroidClassesTask : DefaultTask() {
             } catch (failure: IllegalArgumentException) {
                 throw GradleException(failure.message ?: "Invalid StrGuard release seed", failure)
             }
-        val actualFingerprint = CryptoPrimitives.hex(CryptoPrimitives.sha256(seedBytes))
-        if (actualFingerprint != releaseSeedFingerprint.get()) {
-            throw GradleException("StrGuard release seed fingerprint does not match the configured seed")
+        try {
+            val fingerprint = CryptoPrimitives.sha256(seedBytes)
+            val actualFingerprint =
+                try {
+                    CryptoPrimitives.hex(fingerprint)
+                } finally {
+                    fingerprint.fill(0)
+                }
+            if (actualFingerprint != releaseSeedFingerprint.get()) {
+                throw GradleException("StrGuard release seed fingerprint does not match the configured seed")
+            }
+            return seed
+        } finally {
+            seedBytes.fill(0)
         }
-        seedBytes.fill(0)
-        return seed
     }
 
     private fun resetDirectory(directory: Path) {
@@ -263,16 +309,30 @@ abstract class TransformAndroidClassesTask : DefaultTask() {
         Files.createDirectories(directory)
     }
 
-    private fun intLe(value: Int): ByteArray =
-        ByteBuffer.allocate(Int.SIZE_BYTES).order(ByteOrder.LITTLE_ENDIAN).putInt(value).array()
+    private fun commitOutputs(
+        stagedOutput: Path,
+        output: Path,
+        nativeInputs: Path,
+        nativeInputsOutput: Path,
+        reports: Path,
+        reportsOutput: Path,
+    ) {
+        replaceOutputsAtomically(
+            OutputReplacement(stagedOutput, output),
+            OutputReplacement(nativeInputs, nativeInputsOutput),
+            OutputReplacement(reports, reportsOutput),
+        )
+    }
+
+    private fun intLe(value: Int): ByteArray = ByteBuffer.allocate(Int.SIZE_BYTES).order(ByteOrder.LITTLE_ENDIAN).putInt(value).array()
 }
 
 private fun shouldDiscardJarEntry(entryName: String): Boolean {
     val upperCaseName = entryName.uppercase()
     return upperCaseName == "META-INF/MANIFEST.MF" ||
-            upperCaseName.endsWith(".SF") ||
-            upperCaseName.endsWith(".RSA") ||
-            upperCaseName.endsWith(".DSA")
+        upperCaseName.endsWith(".SF") ||
+        upperCaseName.endsWith(".RSA") ||
+        upperCaseName.endsWith(".DSA")
 }
 
 private const val CLASS_SUFFIX = ".class"

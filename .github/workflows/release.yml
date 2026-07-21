@@ -1,42 +1,273 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: SemVer version without the v prefix
+        required: true
+        type: string
+      ref:
+        description: Commit SHA from protected main to release
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.version }}
   cancel-in-progress: false
 
+env:
+  STRGUARD_RELEASE_SEED_HEX: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  RUST_TOOLCHAIN: 1.94.1
+  ANDROID_NDK_VERSION: 27.2.12479018
+
 jobs:
-  github-release:
-    name: Create GitHub Release
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+  release:
+    name: Verify, publish, and release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    environment: release
     permissions:
       contents: write
+      checks: read
+      issues: read
     steps:
-      - name: Validate the release tag
-        shell: bash
-        run: |
-          semver='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
-          if [[ ! "${GITHUB_REF_NAME}" =~ ${semver} ]]; then
-            echo "Release tag must use v<semver> syntax" >&2
-            exit 1
-          fi
-      - name: Create the GitHub Release
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate version and immutable source
+        id: source
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
         shell: bash
         run: |
-          release_args=(--verify-tag --generate-notes --title "StrGuard ${GITHUB_REF_NAME#v}")
-          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
-            release_args+=(--prerelease)
+          semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+          [[ "${VERSION}" =~ ${semver} ]] || { echo "Invalid SemVer: ${VERSION}" >&2; exit 1; }
+          [[ "$(git rev-parse HEAD)" == "${{ inputs.ref }}" ]] || { echo "Checked out SHA mismatch" >&2; exit 1; }
+          git merge-base --is-ancestor HEAD origin/master || { echo "Release SHA is not on origin/master" >&2; exit 1; }
+          grep -Fq "version = \"${VERSION}\"" native/strguard-runtime/Cargo.toml || {
+            echo "Cargo.toml version does not match ${VERSION}" >&2
+            exit 1
+          }
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v${VERSION}" >/dev/null 2>&1; then
+            echo "Tag v${VERSION} already exists" >&2
+            exit 1
           fi
-
-          gh release create "${GITHUB_REF_NAME}" "${release_args[@]}"
+          open_critical=$(gh issue list --state open --limit 1000 --json number,title,labels --jq '
+            [.[] | select(any(.labels[]; ((.name | ascii_downcase) == "p0") or ((.name | ascii_downcase) == "p1")))]
+          ')
+          [[ "$(jq length <<<"${open_critical}")" == "0" ]] || {
+            echo "Open P0/P1 issues block release: ${open_critical}" >&2
+            exit 1
+          }
+          if [[ "${VERSION}" != *-* ]]; then
+            rc=$(gh release list --limit 100 --json tagName,publishedAt,isPrerelease --jq \
+              "[.[] | select(.isPrerelease and (.tagName | startswith(\"v${VERSION}-rc.\")))] | sort_by(.publishedAt) | last // empty")
+            [[ -n "${rc}" ]] || { echo "GA requires an observed v${VERSION}-rc.N release" >&2; exit 1; }
+            rc_tag=$(jq -r .tagName <<<"${rc}")
+            rc_sha=$(git rev-list -n 1 "${rc_tag}")
+            [[ "${rc_sha}" == "$(git rev-parse HEAD)" ]] || {
+              echo "GA source differs from observed ${rc_tag} source" >&2
+              exit 1
+            }
+            rc_published=$(date -d "$(jq -r .publishedAt <<<"${rc}")" +%s)
+            minimum_age=$((7 * 24 * 60 * 60))
+            (( $(date +%s) - rc_published >= minimum_age )) || {
+              echo "${rc_tag} has not completed the 7-day observation period" >&2
+              exit 1
+            }
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
+      - name: Require complete GA check matrix
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.source.outputs.sha }}
+        shell: bash
+        run: |
+          required=(
+            "JDK 17 quality"
+            "JDK 21 quality"
+            "Java 11 protected runtime"
+            "Linux x64 Native runtime"
+            "Linux arm64 Native runtime"
+            "Windows x64 Native runtime"
+            "Windows arm64 Native runtime"
+            "macOS x64 Native runtime"
+            "macOS arm64 Native runtime"
+            "Android 4 ABI packaging and R8"
+            "Reproducible protected artifacts"
+            "Firebase armeabi-v7a"
+            "Firebase arm64-v8a"
+            "Firebase x86"
+            "Firebase x86_64"
+          )
+          checks=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${SHA}/check-runs?per_page=100")
+          for name in "${required[@]}"; do
+            conclusion=$(jq -r --arg name "${name}" '[.check_runs[] | select(.name == $name)] | last | .conclusion // "missing"' <<<"${checks}")
+            [[ "${conclusion}" == "success" ]] || {
+              echo "Required check '${name}' is ${conclusion}" >&2
+              exit 1
+            }
+          done
+      - uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
+          targets: x86_64-unknown-linux-gnu,armv7-linux-androideabi,aarch64-linux-android,i686-linux-android,x86_64-linux-android
+      - uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+      - name: Install Android SDK and NDK
+        run: >-
+          sdkmanager "platforms;android-34" "build-tools;34.0.0"
+          "ndk;${ANDROID_NDK_VERSION}"
+      - name: Install pinned release assurance tools
+        run: |
+          rustup component add llvm-tools-preview
+          cargo install cargo-llvm-cov --version 0.8.7 --locked
+          cargo install cargo-audit --version 0.22.2 --locked
+          cargo install cargo-deny --version 0.20.2 --locked
+      - name: Re-run release quality gate
+        run: |
+          bash ./gradlew :strguard-plugin:check :strguard-plugin:validatePlugins --stacktrace
+          cargo fmt --manifest-path native/strguard-runtime/Cargo.toml -- --check
+          cargo clippy --manifest-path native/strguard-runtime/Cargo.toml --all-targets --locked -- -D warnings
+          cargo test --manifest-path native/strguard-runtime/Cargo.toml --locked
+          bash .github/scripts/verify-rust-performance.sh
+          cargo audit --file native/strguard-runtime/Cargo.lock --deny warnings
+          cargo deny --manifest-path native/strguard-runtime/Cargo.toml check advisories licenses sources bans
+          cargo llvm-cov --manifest-path native/strguard-runtime/Cargo.toml --locked \
+            --fail-under-functions 85 \
+            --fail-under-lines 85 \
+            --fail-under-regions 85
+          bash .github/scripts/verify-reproducible.sh
+      - name: Publish Gradle plugin
+        env:
+          GRADLE_PUBLISH_KEY: ${{ secrets.GRADLE_PUBLISH_KEY }}
+          GRADLE_PUBLISH_SECRET: ${{ secrets.GRADLE_PUBLISH_SECRET }}
+          VERSION: ${{ inputs.version }}
+        run: >-
+          bash ./gradlew :strguard-plugin:publishPlugins
+          -PstrguardVersion="${VERSION}" --stacktrace
+      - name: Verify external Plugin Portal resolution
+        env:
+          VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          smoke=$(mktemp -d)
+          cat >"${smoke}/settings.gradle.kts" <<'EOF'
+          pluginManagement { repositories { gradlePluginPortal(); mavenCentral() } }
+          rootProject.name = "strguard-portal-smoke"
+          EOF
+          cat >"${smoke}/build.gradle.kts" <<EOF
+          plugins {
+              application
+              id("io.github.weg2022.strguard") version "${VERSION}"
+          }
+          application { mainClass.set("sample.PortalMain") }
+          strGuard { stringGuardPackages.set(listOf("sample")) }
+          EOF
+          mkdir -p "${smoke}/src/main/java/sample"
+          cat >"${smoke}/src/main/java/sample/PortalMain.java" <<'EOF'
+          package sample;
+          public final class PortalMain {
+              public static void main(String[] args) {
+                  System.out.println("portal-jvm-sensitive-value");
+              }
+          }
+          EOF
+          for attempt in {1..12}; do
+            if bash ./gradlew -p "${smoke}" run --refresh-dependencies --stacktrace \
+              | tee "${smoke}/jvm-smoke.log"; then
+              grep -Fxq "portal-jvm-sensitive-value" "${smoke}/jvm-smoke.log" && break
+            fi
+            [[ "${attempt}" == "12" ]] && {
+              echo "Plugin Portal did not run StrGuard ${VERSION} JVM consumer" >&2
+              exit 1
+            }
+            sleep 30
+          done
+          android_smoke=$(mktemp -d)
+          cat >"${android_smoke}/settings.gradle.kts" <<'EOF'
+          pluginManagement { repositories { google(); gradlePluginPortal(); mavenCentral() } }
+          dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+          rootProject.name = "strguard-portal-android-smoke"
+          EOF
+          cat >"${android_smoke}/build.gradle.kts" <<EOF
+          plugins {
+              id("com.android.application") version "8.13.2"
+              id("io.github.weg2022.strguard") version "${VERSION}"
+          }
+          android {
+              namespace = "sample.portal.android"
+              compileSdk = 34
+              ndkVersion = "${ANDROID_NDK_VERSION}"
+              defaultConfig { minSdk = 21 }
+          }
+          strGuard {
+              stringGuardPackages.set(listOf("sample.portal.android"))
+              androidAbis.set(setOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64"))
+          }
+          EOF
+          mkdir -p "${android_smoke}/src/main/java/sample/portal/android"
+          cat >"${android_smoke}/src/main/AndroidManifest.xml" <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"><application /></manifest>
+          EOF
+          cat >"${android_smoke}/src/main/java/sample/portal/android/PortalValue.java" <<'EOF'
+          package sample.portal.android;
+          public final class PortalValue {
+              public static String reveal() { return "portal-android-sensitive-value"; }
+          }
+          EOF
+          bash ./gradlew -p "${android_smoke}" assembleRelease --refresh-dependencies --stacktrace
+          mapfile -t apks < <(find "${android_smoke}/build/outputs/apk/release" -name '*.apk' -print)
+          [[ "${#apks[@]}" == "1" ]]
+          apk=${apks[0]}
+          for abi in armeabi-v7a arm64-v8a x86 x86_64; do
+            unzip -Z1 "${apk}" | grep -Eq "^lib/${abi}/libsg_[0-9a-f]+[.]so$"
+          done
+          ! unzip -p "${apk}" classes.dex | grep -aFq "portal-android-sensitive-value"
+      - name: Build release artifacts and checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          bash ./gradlew :strguard-plugin:build -PstrguardVersion="${VERSION}" --stacktrace
+          mkdir -p release-artifacts
+          cp strguard-plugin/build/libs/*.jar release-artifacts/
+          gh api "repos/${GITHUB_REPOSITORY}/dependency-graph/sbom" > release-artifacts/sbom-response.json
+          jq -e '.sbom | .spdxVersion and .name and (.packages | type == "array")' \
+            release-artifacts/sbom-response.json >/dev/null
+          jq '.sbom' release-artifacts/sbom-response.json \
+            > "release-artifacts/strguard-${VERSION}.spdx.json"
+          rm release-artifacts/sbom-response.json
+          (cd release-artifacts && sha256sum *.jar *.json > SHA256SUMS)
+      - name: Create immutable tag and GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          SHA: ${{ steps.source.outputs.sha }}
+        shell: bash
+        run: |
+          tag_sha=$(gh api "repos/${GITHUB_REPOSITORY}/git/tags" \
+            -f tag="v${VERSION}" \
+            -f message="StrGuard ${VERSION}" \
+            -f object="${SHA}" \
+            -f type=commit \
+            --jq .sha)
+          gh api "repos/${GITHUB_REPOSITORY}/git/refs" \
+            -f ref="refs/tags/v${VERSION}" \
+            -f sha="${tag_sha}"
+          release_args=(--verify-tag --generate-notes --title "StrGuard ${VERSION}")
+          [[ "${VERSION}" == *-* ]] && release_args+=(--prerelease)
+          gh release create "v${VERSION}" release-artifacts/* "${release_args[@]}"

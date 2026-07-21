@@ -18,6 +18,10 @@ import java.security.MessageDigest
 
 @DisableCachingByDefault(because = "Outputs contain build-specific seed-derived Native key material")
 abstract class TransformClassesTask : DefaultTask() {
+    init {
+        outputs.doNotCacheIf("Outputs contain build-specific seed-derived Native key material") { true }
+    }
+
     @get:InputFiles
     @get:PathSensitive(PathSensitivity.RELATIVE)
     abstract val inputClassDirectories: ConfigurableFileCollection
@@ -80,47 +84,89 @@ abstract class TransformClassesTask : DefaultTask() {
                 keepMetadataPackages = keepMetadataPackages.get(),
             )
         val sources = collectInputFiles()
-        val destination = outputDirectory.get().asFile.toPath()
-        val nativeInputs = nativeInputDirectory.get().asFile.toPath()
-        val reports = reportDirectory.get().asFile.toPath()
+        val destinationOutput = outputDirectory.get().asFile.toPath()
+        val nativeInputsOutput = nativeInputDirectory.get().asFile.toPath()
+        val reportsOutput = reportDirectory.get().asFile.toPath()
+        val stagingRoot = temporaryDir.toPath().resolve("atomic-output")
+        resetDirectory(stagingRoot)
+        val destination = stagingRoot.resolve("classes")
+        val nativeInputs = stagingRoot.resolve("native-input")
+        val reports = stagingRoot.resolve("reports")
         resetDirectory(destination)
         resetDirectory(nativeInputs)
         resetDirectory(reports)
+        val inputClassCount = sources.count { source -> source.source.fileName.toString().endsWith(CLASS_SUFFIX) }
+        val classNames =
+            if (settings.enabled) {
+                sources.filter { source -> source.source.fileName.toString().endsWith(CLASS_SUFFIX) }
+                    .map { source -> ClassReader(Files.readAllBytes(source.source)).className }
+            } else {
+                emptyList()
+            }
+        val selection = settings.analyzeClasses(classNames, inputClassCount)
+        selection.warningMessages().forEach(logger::warn)
         if (!settings.enabled) {
             copyUnchanged(sources, destination)
-            writeReport(reports, protectedStrings = 0, removedMetadata = 0)
+            writeReport(
+                reports,
+                TransformReport(
+                    enabled = false,
+                    runtimeTarget = DISABLED_STRGUARD_VALUE,
+                    selection = selection,
+                    protectedStrings = 0,
+                    removedMetadata = 0,
+                ),
+            )
+            commitOutputs(destination, destinationOutput, nativeInputs, nativeInputsOutput, reports, reportsOutput)
             logSummary(protectedStrings = 0, removedMetadata = 0)
             return
         }
 
         val inputDigest = digestInputs(sources)
         val seed = validatedSeed()
-        val nativeTarget = NativeTarget.fromRustTriple(targetTriple.get())
-        val vaultBuilder = SecureVaultBuilder(seed, moduleIdentity.get(), inputDigest, nativeTarget)
+        val nativeTarget = JvmNativeTarget.fromRustTriple(targetTriple.get())
+        val vaultBuilder =
+            try {
+                SecureVaultBuilder(seed, moduleIdentity.get(), inputDigest, nativeTarget)
+            } finally {
+                inputDigest.fill(0)
+            }
 
-        val metadataMappings = linkedSetOf<String>()
-        sources.forEach { source ->
-            val target = destination.resolve(source.relativePath)
-            Files.createDirectories(target.parent)
-            if (source.source.fileName.toString().endsWith(".class")) {
-                val originalBytes = Files.readAllBytes(source.source)
-                val className = ClassReader(originalBytes).className
-                if (settings.shouldTransformClass(className)) {
-                    val result = ClassTransformer.transform(originalBytes, settings, vaultBuilder)
-                    metadataMappings.addAll(result.metadataMappings)
-                    Files.write(target, result.bytes)
+        vaultBuilder.use { builder ->
+            val metadataMappings = linkedSetOf<String>()
+            sources.forEach { source ->
+                val target = destination.resolve(source.relativePath)
+                Files.createDirectories(target.parent)
+                if (source.source.fileName.toString().endsWith(".class")) {
+                    val originalBytes = Files.readAllBytes(source.source)
+                    val className = ClassReader(originalBytes).className
+                    if (settings.shouldTransformClass(className)) {
+                        val result = ClassTransformer.transform(originalBytes, settings, builder)
+                        metadataMappings.addAll(result.metadataMappings)
+                        Files.write(target, result.bytes)
+                    } else {
+                        Files.copy(source.source, target)
+                    }
                 } else {
                     Files.copy(source.source, target)
                 }
-            } else {
-                Files.copy(source.source, target)
             }
-        }
 
-        SupportClassFiles.writeRuntime(destination, vaultBuilder.bridge)
-        vaultBuilder.writeNativeInputs(nativeInputs)
-        writeReport(reports, vaultBuilder.protectedStringCount, metadataMappings.size)
-        logSummary(vaultBuilder.protectedStringCount, metadataMappings.size)
+            SupportClassFiles.writeRuntime(destination, builder.bridge)
+            builder.writeNativeInputs(nativeInputs).close()
+            writeReport(
+                reports,
+                TransformReport(
+                    enabled = true,
+                    runtimeTarget = nativeTarget.rustTriple,
+                    selection = selection,
+                    protectedStrings = builder.protectedStringCount,
+                    removedMetadata = metadataMappings.size,
+                ),
+            )
+            commitOutputs(destination, destinationOutput, nativeInputs, nativeInputsOutput, reports, reportsOutput)
+            logSummary(builder.protectedStringCount, metadataMappings.size)
+        }
     }
 
     private fun copyUnchanged(sources: List<InputFile>, destination: Path) {
@@ -131,10 +177,10 @@ abstract class TransformClassesTask : DefaultTask() {
         }
     }
 
-    private fun writeReport(reports: Path, protectedStrings: Int, removedMetadata: Int) {
+    private fun writeReport(reports: Path, report: TransformReport) {
         Files.writeString(
             reports.resolve("summary.txt"),
-            "protectedStrings=$protectedStrings\nremovedMetadata=$removedMetadata\n",
+            report.asPropertiesText(),
             StandardCharsets.UTF_8,
         )
     }
@@ -143,7 +189,7 @@ abstract class TransformClassesTask : DefaultTask() {
         if (consoleOutput.get()) {
             logger.lifecycle(
                 "StrGuard 2 protected $protectedStrings call sites and removed " +
-                        "$removedMetadata metadata annotations",
+                    "$removedMetadata metadata annotations",
             )
         }
     }
@@ -159,12 +205,21 @@ abstract class TransformClassesTask : DefaultTask() {
             } catch (failure: IllegalArgumentException) {
                 throw GradleException(failure.message ?: "Invalid StrGuard release seed", failure)
             }
-        val actualFingerprint = CryptoPrimitives.hex(CryptoPrimitives.sha256(seedBytes))
-        if (actualFingerprint != releaseSeedFingerprint.get()) {
-            throw GradleException("StrGuard release seed fingerprint does not match the configured seed")
+        try {
+            val fingerprint = CryptoPrimitives.sha256(seedBytes)
+            val actualFingerprint =
+                try {
+                    CryptoPrimitives.hex(fingerprint)
+                } finally {
+                    fingerprint.fill(0)
+                }
+            if (actualFingerprint != releaseSeedFingerprint.get()) {
+                throw GradleException("StrGuard release seed fingerprint does not match the configured seed")
+            }
+            return seed
+        } finally {
+            seedBytes.fill(0)
         }
-        seedBytes.fill(0)
-        return seed
     }
 
     private fun collectInputFiles(): List<InputFile> {
@@ -207,6 +262,21 @@ abstract class TransformClassesTask : DefaultTask() {
         directory.toFile().deleteRecursively()
         Files.createDirectories(directory)
     }
+
+    private fun commitOutputs(
+        destination: Path,
+        destinationOutput: Path,
+        nativeInputs: Path,
+        nativeInputsOutput: Path,
+        reports: Path,
+        reportsOutput: Path,
+    ) {
+        replaceOutputsAtomically(
+            OutputReplacement(destination, destinationOutput),
+            OutputReplacement(nativeInputs, nativeInputsOutput),
+            OutputReplacement(reports, reportsOutput),
+        )
+    }
 }
 
 private data class InputFile(
@@ -214,3 +284,5 @@ private data class InputFile(
     val relativePath: Path,
     val normalizedRelativePath: String,
 )
+
+private const val CLASS_SUFFIX = ".class"

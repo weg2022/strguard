@@ -17,10 +17,10 @@ abstract class PrepareSupportClassesTask : DefaultTask() {
         Files.createDirectories(destination)
         SupportClassFiles.writeAnnotations(destination)
         Files.writeString(
-            destination.resolve(ANDROID_PROGUARD_RULES_FILE_NAME),
-            "-keep class io.github.weg2022.strguard.generated.B* { *; }\n",
+            destination.resolve(STRGUARD_SHRINKER_RULES_FILE_NAME),
+            StrGuardShrinkerRules.text,
         )
     }
 }
 
-internal const val ANDROID_PROGUARD_RULES_FILE_NAME = "strguard-android-rules.pro"
+internal const val STRGUARD_SHRINKER_RULES_FILE_NAME = "strguard-rules.pro"

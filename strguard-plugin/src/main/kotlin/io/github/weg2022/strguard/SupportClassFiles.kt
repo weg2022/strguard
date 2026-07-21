@@ -3,6 +3,8 @@ package io.github.weg2022.strguard
 import io.github.weg2022.strguard.runtime.NativeLibraryLoader
 import io.github.weg2022.strguard.vault.BridgeModel
 import org.objectweb.asm.*
+import org.objectweb.asm.commons.ClassRemapper
+import org.objectweb.asm.commons.SimpleRemapper
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -24,8 +26,8 @@ internal object SupportClassFiles {
     }
 
     fun writeRuntime(destination: Path, bridge: BridgeModel) {
-        if (bridge.extractFromResources) {
-            copyClassFile(NativeLibraryLoader::class.java, destination)
+        bridge.loaderInternalClassName?.let { loaderInternalClassName ->
+            writeRemappedLoader(destination, loaderInternalClassName)
         }
         writeBridge(destination, bridge)
     }
@@ -54,15 +56,25 @@ internal object SupportClassFiles {
                 visitLdcInsn(bridge.nativeLibraryFileName)
                 visitMethodInsn(
                     Opcodes.INVOKESTATIC,
-                    NATIVE_LOADER_INTERNAL_NAME,
+                    requireNotNull(bridge.loaderInternalClassName) {
+                        "Desktop StrGuard bridge requires a generated Native loader"
+                    },
                     "extract",
                     "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
                     false,
                 )
+                visitInsn(Opcodes.DUP)
                 visitMethodInsn(
                     Opcodes.INVOKESTATIC,
                     "java/lang/System",
                     "load",
+                    "(Ljava/lang/String;)V",
+                    false,
+                )
+                visitMethodInsn(
+                    Opcodes.INVOKESTATIC,
+                    bridge.loaderInternalClassName,
+                    "loaded",
                     "(Ljava/lang/String;)V",
                     false,
                 )
@@ -118,20 +130,24 @@ internal object SupportClassFiles {
         return writer.toByteArray()
     }
 
-    private fun copyClassFile(type: Class<*>, destination: Path) {
-        val resourcePath = type.name.replace('.', '/') + ".class"
-        val output = destination.resolve(resourcePath)
+    private fun writeRemappedLoader(destination: Path, loaderInternalClassName: String) {
+        val sourceInternalName = NativeLibraryLoader::class.java.name.replace('.', '/')
+        val resourcePath = "$sourceInternalName.class"
+        val output = destination.resolve("$loaderInternalClassName.class")
         check(!Files.exists(output)) {
             "StrGuard cannot inject support class because $output already exists"
         }
         Files.createDirectories(output.parent)
-        val source = type.getResourceAsStream("/$resourcePath")
+        val source = NativeLibraryLoader::class.java.getResourceAsStream("/$resourcePath")
             ?: error("Unable to load bundled support class $resourcePath")
         source.use { input ->
-            Files.newOutputStream(output).use(input::copyTo)
+            val reader = ClassReader(input)
+            val writer = ClassWriter(0)
+            reader.accept(
+                ClassRemapper(writer, SimpleRemapper(sourceInternalName, loaderInternalClassName)),
+                0,
+            )
+            Files.write(output, writer.toByteArray())
         }
     }
 }
-
-private const val NATIVE_LOADER_INTERNAL_NAME =
-    "io/github/weg2022/strguard/runtime/NativeLibraryLoader"
