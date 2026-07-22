@@ -116,6 +116,19 @@ internal fun nativeProcessEnvironment(extra: Map<String, String>): Map<String, S
     return sanitized
 }
 
+internal fun rustupHomeDirectory(): String {
+    val configured = System.getenv("RUSTUP_HOME")
+    if (!configured.isNullOrBlank()) return java.nio.file.Path.of(configured).toAbsolutePath().normalize().toString()
+    val windows = System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
+    val primaryHome = if (windows) System.getenv("USERPROFILE") else System.getenv("HOME")
+    val secondaryHome = if (windows) System.getenv("HOME") else System.getenv("USERPROFILE")
+    val userHome =
+        primaryHome?.takeIf(String::isNotBlank)
+            ?: secondaryHome?.takeIf(String::isNotBlank)
+            ?: System.getProperty("user.home")
+    return java.nio.file.Path.of(userHome, ".rustup").toAbsolutePath().normalize().toString()
+}
+
 private val NATIVE_ENVIRONMENT_ALLOWLIST =
     setOf(
         "PATH",

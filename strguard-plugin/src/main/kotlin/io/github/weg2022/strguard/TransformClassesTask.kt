@@ -9,19 +9,14 @@ import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.*
-import org.gradle.work.DisableCachingByDefault
 import org.objectweb.asm.ClassReader
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.security.MessageDigest
 
-@DisableCachingByDefault(because = "Outputs contain build-specific seed-derived Native key material")
+@CacheableTask
 abstract class TransformClassesTask : DefaultTask() {
-    init {
-        outputs.doNotCacheIf("Outputs contain build-specific seed-derived Native key material") { true }
-    }
-
     @get:InputFiles
     @get:PathSensitive(PathSensitivity.RELATIVE)
     abstract val inputClassDirectories: ConfigurableFileCollection
@@ -54,6 +49,9 @@ abstract class TransformClassesTask : DefaultTask() {
     abstract val java9StringConcatEnabled: Property<Boolean>
 
     @get:Input
+    abstract val strictStringCoverage: Property<Boolean>
+
+    @get:Input
     abstract val consoleOutput: Property<Boolean>
 
     @get:Input
@@ -77,6 +75,7 @@ abstract class TransformClassesTask : DefaultTask() {
             TransformSettings(
                 enabled = stringGuardEnabled.get(),
                 java9StringConcatEnabled = java9StringConcatEnabled.get(),
+                strictStringCoverage = strictStringCoverage.get(),
                 removeMetadata = removeMetadata.get(),
                 stringGuardPackages = stringGuardPackages.get(),
                 keepStringPackages = keepStringPackages.get(),
@@ -111,14 +110,15 @@ abstract class TransformClassesTask : DefaultTask() {
                 reports,
                 TransformReport(
                     enabled = false,
+                    strictStringCoverage = settings.strictStringCoverage,
                     runtimeTarget = DISABLED_STRGUARD_VALUE,
                     selection = selection,
-                    protectedStrings = 0,
+                    stringCoverage = StringCoverage(),
                     removedMetadata = 0,
                 ),
             )
             commitOutputs(destination, destinationOutput, nativeInputs, nativeInputsOutput, reports, reportsOutput)
-            logSummary(protectedStrings = 0, removedMetadata = 0)
+            logSummary(StringCoverage(), removedMetadata = 0)
             return
         }
 
@@ -134,6 +134,7 @@ abstract class TransformClassesTask : DefaultTask() {
 
         vaultBuilder.use { builder ->
             val metadataMappings = linkedSetOf<String>()
+            var stringCoverage = StringCoverage()
             sources.forEach { source ->
                 val target = destination.resolve(source.relativePath)
                 Files.createDirectories(target.parent)
@@ -143,6 +144,7 @@ abstract class TransformClassesTask : DefaultTask() {
                     if (settings.shouldTransformClass(className)) {
                         val result = ClassTransformer.transform(originalBytes, settings, builder)
                         metadataMappings.addAll(result.metadataMappings)
+                        stringCoverage = stringCoverage.plus(result.stringCoverage)
                         Files.write(target, result.bytes)
                     } else {
                         Files.copy(source.source, target)
@@ -152,20 +154,24 @@ abstract class TransformClassesTask : DefaultTask() {
                 }
             }
 
-            SupportClassFiles.writeRuntime(destination, builder.bridge)
-            builder.writeNativeInputs(nativeInputs).close()
-            writeReport(
-                reports,
+            check(stringCoverage.protectedStrings == builder.protectedStringCount.toLong()) {
+                "StrGuard coverage count does not match generated vault records"
+            }
+            val report =
                 TransformReport(
                     enabled = true,
+                    strictStringCoverage = settings.strictStringCoverage,
                     runtimeTarget = nativeTarget.rustTriple,
                     selection = selection,
-                    protectedStrings = builder.protectedStringCount,
+                    stringCoverage = stringCoverage,
                     removedMetadata = metadataMappings.size,
-                ),
-            )
+                )
+            handleCoverage(settings, stringCoverage, reports, reportsOutput, report)
+            SupportClassFiles.writeRuntime(destination, builder.bridge)
+            builder.writeNativeInputs(nativeInputs).close()
+            writeReport(reports, report)
             commitOutputs(destination, destinationOutput, nativeInputs, nativeInputsOutput, reports, reportsOutput)
-            logSummary(builder.protectedStringCount, metadataMappings.size)
+            logSummary(stringCoverage, metadataMappings.size)
         }
     }
 
@@ -185,11 +191,27 @@ abstract class TransformClassesTask : DefaultTask() {
         )
     }
 
-    private fun logSummary(protectedStrings: Int, removedMetadata: Int) {
+    private fun handleCoverage(
+        settings: TransformSettings,
+        coverage: StringCoverage,
+        reports: Path,
+        reportsOutput: Path,
+        report: TransformReport,
+    ) {
+        val violation = coverage.strictViolationMessage() ?: return
+        if (settings.strictStringCoverage) {
+            writeReport(reports, report)
+            replaceOutputsAtomically(OutputReplacement(reports, reportsOutput))
+            throw GradleException("$violation; strictStringCoverage is enabled")
+        }
+        logger.warn("$violation; enable strictStringCoverage to fail the build")
+    }
+
+    private fun logSummary(stringCoverage: StringCoverage, removedMetadata: Int) {
         if (consoleOutput.get()) {
             logger.lifecycle(
-                "StrGuard 2 protected $protectedStrings call sites and removed " +
-                    "$removedMetadata metadata annotations",
+                "StrGuard protected ${stringCoverage.protectedStrings} string locations, skipped " +
+                    "${stringCoverage.skippedStrings}, and removed $removedMetadata metadata annotations",
             )
         }
     }
@@ -197,7 +219,7 @@ abstract class TransformClassesTask : DefaultTask() {
     private fun validatedSeed(): String {
         val seed = releaseSeedHex.orNull
             ?: throw GradleException(
-                "StrGuard 2 requires strGuard.releaseSeedHex or STRGUARD_RELEASE_SEED_HEX",
+                "StrGuard requires strGuard.releaseSeedHex or STRGUARD_RELEASE_SEED_HEX",
             )
         val seedBytes =
             try {

@@ -24,6 +24,9 @@ abstract class StrGuardExtension @Inject constructor(objects: ObjectFactory) {
     val java9StringConcatEnabled: Property<Boolean> =
         objects.property(Boolean::class.java).convention(true)
 
+    /** Fails after a complete scan when an eligible class contains an unprotected string location. */
+    val strictStringCoverage: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
+
     val consoleOutput: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
 
     val removeMetadata: Property<Boolean> = objects.property(Boolean::class.java).convention(false)

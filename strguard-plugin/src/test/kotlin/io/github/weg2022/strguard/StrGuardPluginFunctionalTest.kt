@@ -42,6 +42,7 @@ class StrGuardPluginFunctionalTest {
             strGuard {
                 releaseSeedHex.set("$TEST_RELEASE_SEED")
                 stringGuardPackages.set(listOf("sample"))
+                strictStringCoverage.set(true)
                 consoleOutput.set(true)
             }
             """.trimIndent(),
@@ -124,6 +125,32 @@ class StrGuardPluginFunctionalTest {
                 public static String specialUtf16() {
                     return "prefix\0\uD800middle\uDC00\uD83D\uDE00suffix";
                 }
+
+                public static String arrayValue(int index) {
+                    String[] values = {
+                        "array-zero",
+                        "array-line-one\narray-line-two",
+                        "array-unicode-\u4F60\u597D-\uD83D\uDE80"
+                    };
+                    return values[index];
+                }
+
+                public static String switchValue(int code) {
+                    switch (code) {
+                        case 0: return "switch-zero";
+                        case 1: return "switch-one\twith-tab";
+                        default: return "switch-default";
+                    }
+                }
+
+                public static String lambdaValue() {
+                    java.util.function.Supplier<String> supplier = () -> "lambda-sensitive-value";
+                    return supplier.get();
+                }
+
+                public static String whitespaceAndControls() {
+                    return " \t\r\n\1\2";
+                }
             }
             """.trimIndent(),
         )
@@ -185,12 +212,25 @@ class StrGuardPluginFunctionalTest {
             setOf(
                 "schemaVersion",
                 "enabled",
+                "strictStringCoverage",
                 "runtimeTarget",
                 "inputClasses",
                 "eligibleClasses",
                 "matchedClasses",
                 "skippedClasses",
+                "stringCandidates",
                 "protectedStrings",
+                "skippedStrings",
+                "strictViolations",
+                "coverageUnknowns",
+                "skippedEmptyStrings",
+                "skippedOversizedStrings",
+                "skippedAnnotationStrings",
+                "skippedConstantDynamicStrings",
+                "skippedDisabledStringConcats",
+                "skippedUnsupportedStringConcats",
+                "skippedUnsupportedInvokeDynamics",
+                "skippedUnsupportedFieldStrings",
                 "removedMetadata",
                 "unmatchedKeepStringPackages",
                 "unmatchedKeepMetadataPackages",
@@ -199,12 +239,16 @@ class StrGuardPluginFunctionalTest {
         )
         assertEquals("1", summary.getProperty("schemaVersion"))
         assertEquals("true", summary.getProperty("enabled"))
+        assertEquals("true", summary.getProperty("strictStringCoverage"))
         assertEquals(nativeTarget.rustTriple, summary.getProperty("runtimeTarget"))
         assertEquals("3", summary.getProperty("inputClasses"))
         assertEquals("3", summary.getProperty("eligibleClasses"))
         assertEquals("3", summary.getProperty("matchedClasses"))
         assertEquals("0", summary.getProperty("skippedClasses"))
         assertTrue(summary.getProperty("protectedStrings").toInt() > 0)
+        assertEquals("0", summary.getProperty("skippedStrings"))
+        assertEquals("0", summary.getProperty("strictViolations"))
+        assertEquals("0", summary.getProperty("coverageUnknowns"))
         assertEquals("0", summary.getProperty("removedMetadata"))
         assertFalse(reportText.contains(TEST_RELEASE_SEED))
         assertFalse(reportText.contains("java-constant"))
@@ -240,6 +284,16 @@ class StrGuardPluginFunctionalTest {
                 "prefix\u0000\uD800middle\uDC00\uD83D\uDE00suffix".toCharArray(),
                 specialUtf16.toCharArray(),
             )
+            val arrayValue = example.getMethod("arrayValue", Int::class.javaPrimitiveType)
+            assertEquals("array-zero", arrayValue.invoke(null, 0))
+            assertEquals("array-line-one\narray-line-two", arrayValue.invoke(null, 1))
+            assertEquals("array-unicode-\u4F60\u597D-\uD83D\uDE80", arrayValue.invoke(null, 2))
+            val switchValue = example.getMethod("switchValue", Int::class.javaPrimitiveType)
+            assertEquals("switch-zero", switchValue.invoke(null, 0))
+            assertEquals("switch-one\twith-tab", switchValue.invoke(null, 1))
+            assertEquals("switch-default", switchValue.invoke(null, 9))
+            assertEquals("lambda-sensitive-value", example.getMethod("lambdaValue").invoke(null))
+            assertEquals(" \t\r\n\u0001\u0002", example.getMethod("whitespaceAndControls").invoke(null))
         }
 
         val artifact = projectDirectory.resolve("build/libs/java-consumer.jar")
@@ -299,8 +353,8 @@ class StrGuardPluginFunctionalTest {
             val failure = assertFails { Class.forName("sample.JavaExample", true, loader) }
             val messages = generateSequence(failure) { cause -> cause.cause }.mapNotNull(Throwable::message).toList()
             assertTrue(
-                messages.any { message -> message.contains("StrGuard vault authentication failed") },
-                "Expected Native authentication failure, got: $messages",
+                messages.any { message -> message.contains("No valid StrGuard Native runtime resource container") },
+                "Expected Native resource integrity failure, got: $messages",
             )
         }
     }
@@ -334,6 +388,7 @@ class StrGuardPluginFunctionalTest {
             strGuard {
                 releaseSeedHex.set("$TEST_RELEASE_SEED")
                 stringGuardPackages.set(listOf("sample"))
+                strictStringCoverage.set(true)
                 consoleOutput.set(true)
                 removeMetadata.set(true)
                 removeMetadataPackages.set(listOf("sample"))
@@ -358,6 +413,25 @@ class StrGuardPluginFunctionalTest {
                         localIdentity() === "kotlin-shared-identity"
 
                 private fun localIdentity(): String = "kotlin-shared-identity"
+
+                fun collectionValue(index: Int): String {
+                    val values = arrayOf(
+                        "kotlin-array-zero",
+                        "kotlin-line-one\nkotlin-line-two",
+                        "kotlin-unicode-\u4F60\u597D-\uD83D\uDE80",
+                    )
+                    return values[index]
+                }
+
+                fun whenValue(code: Int): String = when (code) {
+                    0 -> "kotlin-when-zero"
+                    1 -> "kotlin-when-one\twith-tab"
+                    else -> "kotlin-when-default"
+                }
+
+                fun lambdaValue(): String = { "kotlin-lambda-sensitive-value" }()
+
+                fun specialUtf16(): String = "prefix\u0000\uD800middle\uDC00\uD83D\uDE00suffix"
             }
 
             object KotlinIdentityPeer {
@@ -393,6 +467,19 @@ class StrGuardPluginFunctionalTest {
             val instance = example.getConstructor().newInstance()
             assertEquals("prefix-value-suffix", example.getMethod("reveal", String::class.java).invoke(instance, "value"))
             assertEquals(true, example.getMethod("preservesLiteralIdentity").invoke(instance))
+            val collectionValue = example.getMethod("collectionValue", Int::class.javaPrimitiveType)
+            assertEquals("kotlin-array-zero", collectionValue.invoke(instance, 0))
+            assertEquals("kotlin-line-one\nkotlin-line-two", collectionValue.invoke(instance, 1))
+            assertEquals("kotlin-unicode-\u4F60\u597D-\uD83D\uDE80", collectionValue.invoke(instance, 2))
+            val whenValue = example.getMethod("whenValue", Int::class.javaPrimitiveType)
+            assertEquals("kotlin-when-zero", whenValue.invoke(instance, 0))
+            assertEquals("kotlin-when-one\twith-tab", whenValue.invoke(instance, 1))
+            assertEquals("kotlin-when-default", whenValue.invoke(instance, 9))
+            assertEquals("kotlin-lambda-sensitive-value", example.getMethod("lambdaValue").invoke(instance))
+            assertContentEquals(
+                "prefix\u0000\uD800middle\uDC00\uD83D\uDE00suffix".toCharArray(),
+                (example.getMethod("specialUtf16").invoke(instance) as String).toCharArray(),
+            )
 
             val topLevel = Class.forName("sample.KotlinExampleKt", true, loader)
             assertEquals("kotlin-constant", topLevel.getField("EXPOSED").get(null))

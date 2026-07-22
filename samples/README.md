@@ -2,6 +2,8 @@
 
 Each directory is an independent Gradle build that loads the StrGuard plugin from this repository through `includeBuild`. The samples cover every supported Gradle project and plugin combination.
 
+Every sample enables `strictStringCoverage` and includes more than a plain literal or concat: static-final/`const val` values, arrays or collections, switch/when branches, lambdas, Unicode, control characters, and multiline strings. The executable Desktop samples assert and print the decoded matrix. The Kotlin Android instrumentation test additionally verifies these values on ART together with literal identity, concurrent first access, and special UTF-16 code units.
+
 | Sample | Supported plugins demonstrated |
 | --- | --- |
 | `java` | `java` |
@@ -38,4 +40,4 @@ rustup target add armv7-linux-androideabi aarch64-linux-android i686-linux-andro
 .\gradlew.bat -p samples/kotlin-android-application assembleDebug
 ```
 
-The Kotlin Android sample packages all four official ABIs and includes an AndroidX instrumentation test for JNI loading, literal identity, and UTF-16. Run it through the Firebase device-farm workflow; local sample commands do not start an emulator. All Android samples use `minSdk = 21`.
+The Kotlin Android sample packages all four official ABIs and includes an AndroidX instrumentation test for JNI loading, the complex string matrix, literal identity, concurrency, and UTF-16. Run it through the Firebase device-farm workflow; local sample commands do not start an emulator. All Android samples use `minSdk = 21`.

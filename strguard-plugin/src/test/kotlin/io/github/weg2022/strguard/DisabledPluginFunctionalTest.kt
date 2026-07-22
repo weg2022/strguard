@@ -108,7 +108,7 @@ class DisabledPluginFunctionalTest {
         assertEquals(TaskOutcome.SUCCESS, result.task(":transformStrGuardMain")?.outcome)
         assertEquals(TaskOutcome.SUCCESS, result.task(":buildStrGuardNativeMain")?.outcome)
         assertEquals(TaskOutcome.SUCCESS, result.task(":verifyStrGuardTaskMetadata")?.outcome)
-        assertTrue(result.output.contains("protected 0 call sites"))
+        assertTrue(result.output.contains("protected 0 string locations, skipped 0"))
         val originalClass = projectDirectory.resolve("build/classes/java/main/sample/DisabledExample.class")
         val transformedClass = projectDirectory.resolve("build/strguard/classes/main/sample/DisabledExample.class")
         assertContentEquals(Files.readAllBytes(originalClass), Files.readAllBytes(transformedClass))
@@ -116,12 +116,25 @@ class DisabledPluginFunctionalTest {
             """
             schemaVersion=1
             enabled=false
+            strictStringCoverage=false
             runtimeTarget=disabled
             inputClasses=1
             eligibleClasses=0
             matchedClasses=0
             skippedClasses=0
+            stringCandidates=0
             protectedStrings=0
+            skippedStrings=0
+            strictViolations=0
+            coverageUnknowns=0
+            skippedEmptyStrings=0
+            skippedOversizedStrings=0
+            skippedAnnotationStrings=0
+            skippedConstantDynamicStrings=0
+            skippedDisabledStringConcats=0
+            skippedUnsupportedStringConcats=0
+            skippedUnsupportedInvokeDynamics=0
+            skippedUnsupportedFieldStrings=0
             removedMetadata=0
             unmatchedKeepStringPackages=
             unmatchedKeepMetadataPackages=

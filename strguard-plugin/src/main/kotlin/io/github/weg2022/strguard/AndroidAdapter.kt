@@ -127,6 +127,7 @@ internal object AndroidAdapter {
             task.releaseSeedFingerprint.convention(project.releaseSeedFingerprint(extension))
             task.moduleIdentity.convention("${project.group}:${project.name}:${project.path}:${variant.name}")
             task.java9StringConcatEnabled.convention(extension.java9StringConcatEnabled)
+            task.strictStringCoverage.convention(extension.strictStringCoverage)
             task.consoleOutput.convention(extension.consoleOutput)
             task.removeMetadata.convention(extension.removeMetadata)
             task.stringGuardPackages.convention(
@@ -215,12 +216,26 @@ internal object AndroidAdapter {
                         )
                         task.runtimeTemplateVersion.convention("2")
                         task.processTimeoutSeconds.convention(DEFAULT_NATIVE_PROCESS_TIMEOUT_SECONDS)
+                        task.externalCargoConfigurationPresent.convention(
+                            project.nativeCargoConfigurationFiles(task).elements.map { files ->
+                                files.any { file -> file.asFile.isFile }
+                            },
+                        )
                         val linkerFile =
                             project.layout.file(
                                 ndkDirectory.zip(hostTag) { directory, tag ->
                                     val host = AndroidNdkHost.fromTag(tag)
                                     directory.asFile.resolve(
                                         "toolchains/llvm/prebuilt/$tag/bin/${host.clangExecutableName(abi, minSdk)}",
+                                    )
+                                },
+                            )
+                        val archiverFile =
+                            project.layout.file(
+                                ndkDirectory.zip(hostTag) { directory, tag ->
+                                    val host = AndroidNdkHost.fromTag(tag)
+                                    directory.asFile.resolve(
+                                        "toolchains/llvm/prebuilt/$tag/bin/${host.executableName("llvm-ar")}",
                                     )
                                 },
                             )
@@ -232,6 +247,9 @@ internal object AndroidAdapter {
                                     spec.parameters.cargoExecutable.set(task.cargoExecutable)
                                     spec.parameters.targetTriple.set(abi.rustTriple)
                                     spec.parameters.linkerExecutable.set(linkerFile)
+                                    spec.parameters.archiverExecutable.set(archiverFile)
+                                    spec.parameters.configurationFiles.from(task.ndkDirectory.file("source.properties"))
+                                    spec.parameters.captureBuildEnvironment(project, task)
                                 },
                                 disabledValue = DISABLED_STRGUARD_VALUE,
                             ),

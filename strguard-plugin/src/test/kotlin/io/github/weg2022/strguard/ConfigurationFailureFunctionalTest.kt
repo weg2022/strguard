@@ -151,6 +151,47 @@ class ConfigurationFailureFunctionalTest {
         )
     }
 
+    @Test
+    fun `strict string coverage writes aggregate report before failing`() {
+        writeProject(
+            """
+            releaseSeedHex.set("$CONFIGURATION_FAILURE_TEST_SEED")
+            strictStringCoverage.set(true)
+            stringGuardPackages.set(listOf("sample"))
+            """.trimIndent(),
+        )
+        writeFile(
+            "src/main/java/sample/Label.java",
+            """
+            package sample;
+
+            public @interface Label {
+                String value();
+            }
+            """.trimIndent(),
+        )
+        writeFile(
+            "src/main/java/sample/AnnotatedValue.java",
+            """
+            package sample;
+
+            @Label("annotation-sensitive-value")
+            public final class AnnotatedValue {}
+            """.trimIndent(),
+        )
+
+        val result = runner().buildAndFail()
+
+        assertContains(result.output, "skippedAnnotationStrings=1")
+        assertContains(result.output, "strictStringCoverage is enabled")
+        val summary = readSummary()
+        assertEquals("true", summary.getProperty("strictStringCoverage"))
+        assertEquals("1", summary.getProperty("skippedAnnotationStrings"))
+        assertEquals("1", summary.getProperty("strictViolations"))
+        assertNoRegularFiles(projectDirectory.resolve("build/strguard/classes/main"))
+        assertNoRegularFiles(projectDirectory.resolve("build/strguard/native-input/main"))
+    }
+
     private fun writeProject(strGuardConfiguration: String) {
         writeFile("settings.gradle.kts", "rootProject.name = \"configuration-failure\"")
         writeFile(
@@ -191,6 +232,13 @@ class ConfigurationFailureFunctionalTest {
             projectDirectory.resolve("build/reports/strguard/main/summary.txt"),
             StandardCharsets.UTF_8,
         ).use(::load)
+    }
+
+    private fun assertNoRegularFiles(path: Path) {
+        if (!Files.exists(path)) return
+        Files.walk(path).use { files ->
+            assertFalse(files.anyMatch(Files::isRegularFile))
+        }
     }
 
     private fun writeFile(relativePath: String, contents: String) {

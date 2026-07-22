@@ -10,4 +10,5 @@ java {
 
 strGuard {
     stringGuardPackages.set(listOf("sample.library"))
+    strictStringCoverage.set(true)
 }

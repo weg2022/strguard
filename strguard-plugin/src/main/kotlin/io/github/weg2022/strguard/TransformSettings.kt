@@ -3,6 +3,7 @@ package io.github.weg2022.strguard
 internal class TransformSettings(
     val enabled: Boolean,
     val java9StringConcatEnabled: Boolean,
+    val strictStringCoverage: Boolean = false,
     val removeMetadata: Boolean,
     stringGuardPackages: List<String>,
     keepStringPackages: List<String>,
@@ -112,20 +113,29 @@ internal data class ClassSelectionSummary(
 
 internal data class TransformReport(
     val enabled: Boolean,
+    val strictStringCoverage: Boolean,
     val runtimeTarget: String,
     val selection: ClassSelectionSummary,
-    val protectedStrings: Int,
+    val stringCoverage: StringCoverage,
     val removedMetadata: Int,
 ) {
     fun asPropertiesText(): String = buildString {
         appendLine("schemaVersion=1")
         appendLine("enabled=$enabled")
+        appendLine("strictStringCoverage=$strictStringCoverage")
         appendLine("runtimeTarget=$runtimeTarget")
         appendLine("inputClasses=${selection.inputClasses}")
         appendLine("eligibleClasses=${selection.eligibleClasses}")
         appendLine("matchedClasses=${selection.matchedClasses}")
         appendLine("skippedClasses=${selection.skippedClasses}")
-        appendLine("protectedStrings=$protectedStrings")
+        appendLine("stringCandidates=${stringCoverage.encounteredStrings}")
+        appendLine("protectedStrings=${stringCoverage.protectedStrings}")
+        appendLine("skippedStrings=${stringCoverage.skippedStrings}")
+        appendLine("strictViolations=${stringCoverage.strictViolations}")
+        appendLine("coverageUnknowns=${stringCoverage.coverageUnknowns}")
+        StringSkipReason.entries.forEach { reason ->
+            appendLine("${reason.reportProperty}=${stringCoverage.skipped(reason)}")
+        }
         appendLine("removedMetadata=$removedMetadata")
         appendLine(
             "unmatchedKeepStringPackages=${selection.unmatchedKeepStringPackages.joinToString(",")}",

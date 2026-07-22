@@ -60,4 +60,5 @@ kotlin {
 
 strGuard {
     stringGuardPackages.set(listOf("sample.kotlin.android"))
+    strictStringCoverage.set(true)
 }

@@ -14,4 +14,5 @@ application {
 
 strGuard {
     stringGuardPackages.set(listOf("sample.application"))
+    strictStringCoverage.set(true)
 }

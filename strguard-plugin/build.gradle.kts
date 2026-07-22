@@ -7,6 +7,7 @@ plugins {
     `maven-publish`
     jacoco
     id("com.gradle.plugin-publish") version "2.1.1"
+    id("com.gradleup.shadow") version "9.1.0"
     id("com.diffplug.spotless") version "8.7.0"
 }
 
@@ -20,6 +21,9 @@ version = providers.gradleProperty("strguardVersion").getOrElse("2.0.0-SNAPSHOT"
 val androidGradlePluginVersion = "8.13.2"
 val kotlinGradlePluginVersion = "2.1.21"
 val composeGradlePluginVersion = "1.8.2"
+val asmVersion = "9.10.1"
+
+val relocatedAsm by configurations.creating
 
 repositories {
     google()
@@ -57,8 +61,10 @@ java {
 
 dependencies {
     implementation(gradleApi())
-    implementation("org.ow2.asm:asm:9.8")
-    implementation("org.ow2.asm:asm-commons:9.8")
+    compileOnly("org.ow2.asm:asm:$asmVersion")
+    compileOnly("org.ow2.asm:asm-commons:$asmVersion")
+    relocatedAsm("org.ow2.asm:asm:$asmVersion")
+    relocatedAsm("org.ow2.asm:asm-commons:$asmVersion")
     compileOnly("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinGradlePluginVersion")
     compileOnly("com.android.tools.build:gradle-api:$androidGradlePluginVersion")
     compileOnly("org.jetbrains.compose:compose-gradle-plugin:$composeGradlePluginVersion")
@@ -66,6 +72,35 @@ dependencies {
     testImplementation(gradleTestKit())
     testImplementation(kotlin("test"))
     testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
+    testImplementation("org.ow2.asm:asm:$asmVersion")
+    testImplementation("org.ow2.asm:asm-commons:$asmVersion")
+}
+
+tasks.shadowJar {
+    archiveClassifier.set("")
+    configurations = listOf(relocatedAsm)
+    relocate("org.objectweb.asm", "io.github.weg2022.strguard.internal.asm")
+}
+
+tasks.jar {
+    archiveClassifier.set("main")
+}
+
+configurations {
+    named("apiElements") {
+        outgoing.artifacts.clear()
+        outgoing.variants.clear()
+        outgoing.artifact(tasks.shadowJar)
+    }
+    named("runtimeElements") {
+        outgoing.artifacts.clear()
+        outgoing.variants.clear()
+        outgoing.artifact(tasks.shadowJar)
+    }
+}
+
+tasks.pluginUnderTestMetadata {
+    pluginClasspath.setFrom(tasks.shadowJar)
 }
 
 tasks.withType<KotlinCompile>().configureEach {
@@ -83,6 +118,13 @@ tasks.withType<JavaCompile>().configureEach {
 }
 
 tasks.withType<Test>().configureEach {
+    dependsOn(tasks.shadowJar)
+    doFirst {
+        systemProperty(
+            "strguard.shadowJar",
+            tasks.shadowJar.get().archiveFile.get().asFile.absolutePath,
+        )
+    }
     useJUnitPlatform()
     finalizedBy(tasks.jacocoTestReport)
 }

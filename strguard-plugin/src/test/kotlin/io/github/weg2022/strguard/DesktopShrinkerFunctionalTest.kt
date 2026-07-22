@@ -2,6 +2,8 @@ package io.github.weg2022.strguard
 
 import org.gradle.testkit.runner.GradleRunner
 import org.gradle.testkit.runner.TaskOutcome
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.io.CleanupMode
 import org.junit.jupiter.api.io.TempDir
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.ValueSource
@@ -19,8 +21,15 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class DesktopShrinkerFunctionalTest {
-    @TempDir
+    @TempDir(cleanup = CleanupMode.NEVER)
     lateinit var projectDirectory: Path
+
+    @AfterEach
+    fun cleanTestProject() {
+        if (projectDirectory.toFile().deleteRecursively() || !Files.exists(projectDirectory)) return
+        // TestKit daemons can retain consumer JAR handles on Windows until the test JVM exits.
+        Files.walk(projectDirectory).use { paths -> paths.forEach { path -> path.toFile().deleteOnExit() } }
+    }
 
     @Test
     fun `public artifact contract verifies and marks a shrinker output`() {

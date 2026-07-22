@@ -54,28 +54,14 @@ internal object SupportClassFiles {
                 visitLdcInsn(Type.getObjectType(bridge.internalClassName))
                 visitLdcInsn(bridge.nativeLibraryResourcePath)
                 visitLdcInsn(bridge.nativeLibraryFileName)
+                visitLdcInsn(bridge.artifactMetadataResourcePath)
                 visitMethodInsn(
                     Opcodes.INVOKESTATIC,
                     requireNotNull(bridge.loaderInternalClassName) {
                         "Desktop StrGuard bridge requires a generated Native loader"
                     },
-                    "extract",
-                    "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
-                    false,
-                )
-                visitInsn(Opcodes.DUP)
-                visitMethodInsn(
-                    Opcodes.INVOKESTATIC,
-                    "java/lang/System",
                     "load",
-                    "(Ljava/lang/String;)V",
-                    false,
-                )
-                visitMethodInsn(
-                    Opcodes.INVOKESTATIC,
-                    bridge.loaderInternalClassName,
-                    "loaded",
-                    "(Ljava/lang/String;)V",
+                    "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
                     false,
                 )
             } else {
@@ -144,7 +130,13 @@ internal object SupportClassFiles {
             val reader = ClassReader(input)
             val writer = ClassWriter(0)
             reader.accept(
-                ClassRemapper(writer, SimpleRemapper(sourceInternalName, loaderInternalClassName)),
+                ClassRemapper(
+                    writer,
+                    SimpleRemapper(
+                        Opcodes.ASM9,
+                        mapOf(sourceInternalName to loaderInternalClassName),
+                    ),
+                ),
                 0,
             )
             Files.write(output, writer.toByteArray())

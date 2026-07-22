@@ -16,4 +16,5 @@ kotlin {
 
 strGuard {
     stringGuardPackages.set(listOf("sample.multiplatform"))
+    strictStringCoverage.set(true)
 }

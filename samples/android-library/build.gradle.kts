@@ -22,4 +22,5 @@ android {
 strGuard {
     androidAbis.set(setOf("arm64-v8a"))
     stringGuardPackages.set(listOf("sample.android.library"))
+    strictStringCoverage.set(true)
 }

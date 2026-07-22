@@ -16,7 +16,7 @@ class StaticAttackHarnessTest {
     lateinit var temporaryDirectory: Path
 
     @Test
-    fun `legacy bytecode is recoverable while version 2 artifacts have no direct secret material`() {
+    fun `legacy bytecode is recoverable while protected artifacts have no direct secret material`() {
         val legacyClass = legacyClass(SECRET, LEGACY_KEY)
         assertEquals(listOf(SECRET), LegacyBytecodeAttacker.recover(legacyClass))
 

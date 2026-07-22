@@ -17,10 +17,29 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class SecureVaultBuilderTest {
+    @Test
+    fun `protection distinguishes empty accepted and oversized UTF-16 strings`() {
+        SecureVaultBuilder(
+            TEST_RELEASE_SEED,
+            MODULE_IDENTITY,
+            INPUT_DIGEST,
+            JvmNativeTarget.WINDOWS_X64,
+        ).use { builder ->
+            assertIs<VaultProtectionResult.Empty>(builder.protect("", "sample/Boundary#empty"))
+            assertIs<VaultProtectionResult.Protected>(
+                builder.protect("x".repeat(30_000), "sample/Boundary#accepted"),
+            )
+            assertIs<VaultProtectionResult.TooLarge>(
+                builder.protect("x".repeat(30_001), "sample/Boundary#oversized"),
+            )
+        }
+    }
+
     @TempDir
     lateinit var temporaryDirectory: Path
 
@@ -87,7 +106,7 @@ class SecureVaultBuilderTest {
     fun `vault v3 preserves Java UTF-16 code units losslessly`() {
         val secret = "prefix\u0000\uD800middle\uDC00\uD83D\uDE00suffix"
         val builder = SecureVaultBuilder(TEST_RELEASE_SEED, MODULE_IDENTITY, INPUT_DIGEST, JvmNativeTarget.WINDOWS_X64)
-        val reference = requireNotNull(builder.protect(secret, "sample/Secrets#utf16()Ljava/lang/String;:ldc:0"))
+        val reference = builder.protect(secret, "sample/Secrets#utf16()Ljava/lang/String;:ldc:0").protectedReference()
         val model = builder.writeNativeInputs(temporaryDirectory.resolve("utf16"))
         val contents = parseVault(Files.readAllBytes(temporaryDirectory.resolve("utf16").resolve(VAULT_FILE_NAME)))
         val record = contents.records.single { it.capability.contentEquals(reference.capabilityBytes()) }
@@ -102,7 +121,9 @@ class SecureVaultBuilderTest {
     @Test
     fun `close clears builder and Native model key material`() {
         val builder = SecureVaultBuilder(TEST_RELEASE_SEED, MODULE_IDENTITY, INPUT_DIGEST, JvmNativeTarget.WINDOWS_X64)
-        requireNotNull(builder.protect(FIRST_SECRET, "sample/Secrets#clear()Ljava/lang/String;:ldc:0"))
+        assertIs<VaultProtectionResult.Protected>(
+            builder.protect(FIRST_SECRET, "sample/Secrets#clear()Ljava/lang/String;:ldc:0"),
+        )
         val model = builder.writeNativeInputs(temporaryDirectory.resolve("clear"))
         val masterKey =
             SecureVaultBuilder::class.java.getDeclaredField("masterKey").run {
@@ -138,8 +159,8 @@ class SecureVaultBuilderTest {
         return try {
             val references =
                 listOf(
-                    requireNotNull(builder.protect(FIRST_SECRET, "sample/Secrets#first()Ljava/lang/String;:ldc:0")),
-                    requireNotNull(builder.protect(FIRST_SECRET, "sample/Secrets#second()Ljava/lang/String;:ldc:0")),
+                    builder.protect(FIRST_SECRET, "sample/Secrets#first()Ljava/lang/String;:ldc:0").protectedReference(),
+                    builder.protect(FIRST_SECRET, "sample/Secrets#second()Ljava/lang/String;:ldc:0").protectedReference(),
                 )
             val model = builder.writeNativeInputs(directory)
             BuiltVault(
@@ -229,6 +250,8 @@ class SecureVaultBuilderTest {
         }
     }
 }
+
+private fun VaultProtectionResult.protectedReference(): VaultReference = assertIs<VaultProtectionResult.Protected>(this).reference
 
 private class BuiltVault(
     val references: List<VaultReference>,

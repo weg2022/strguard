@@ -89,6 +89,7 @@ internal object KotlinMultiplatformAdapter {
                 ),
             )
             task.java9StringConcatEnabled.convention(extension.java9StringConcatEnabled)
+            task.strictStringCoverage.convention(extension.strictStringCoverage)
             task.consoleOutput.convention(extension.consoleOutput)
             task.removeMetadata.convention(extension.removeMetadata)
             task.stringGuardPackages.convention(
@@ -137,6 +138,11 @@ internal object KotlinMultiplatformAdapter {
             )
             task.runtimeTemplateVersion.convention("4")
             task.processTimeoutSeconds.convention(DEFAULT_NATIVE_PROCESS_TIMEOUT_SECONDS)
+            task.externalCargoConfigurationPresent.convention(
+                project.nativeCargoConfigurationFiles(task).elements.map { files ->
+                    files.any { file -> file.asFile.isFile }
+                },
+            )
             task.toolchainFingerprint.convention(
                 project.strGuardProvider(
                     enabled = extension.enabled,
@@ -144,6 +150,7 @@ internal object KotlinMultiplatformAdapter {
                     project.providers.of(NativeToolchainFingerprintValueSource::class.java) { spec ->
                         spec.parameters.cargoExecutable.set(task.cargoExecutable)
                         spec.parameters.targetTriple.set(extension.targetTriple)
+                        spec.parameters.captureBuildEnvironment(project, task)
                     },
                     disabledValue = DISABLED_STRGUARD_VALUE,
                 ),

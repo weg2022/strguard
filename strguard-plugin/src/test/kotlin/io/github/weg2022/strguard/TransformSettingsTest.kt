@@ -97,6 +97,7 @@ class TransformSettingsTest {
         val report =
             TransformReport(
                 enabled = true,
+                strictStringCoverage = true,
                 runtimeTarget = "x86_64-unknown-linux-gnu",
                 selection =
                 ClassSelectionSummary(
@@ -107,7 +108,16 @@ class TransformSettingsTest {
                     unmatchedKeepStringPackages = listOf("sample/unused"),
                     unmatchedKeepMetadataPackages = listOf("sample/metadata"),
                 ),
-                protectedStrings = 7,
+                stringCoverage =
+                StringCoverage(
+                    protectedStrings = 7,
+                    skippedCounts =
+                    mapOf(
+                        StringSkipReason.EMPTY_STRING to 1,
+                        StringSkipReason.ANNOTATION_STRING to 2,
+                    ),
+                    coverageUnknowns = 1,
+                ),
                 removedMetadata = 1,
             )
 
@@ -115,12 +125,25 @@ class TransformSettingsTest {
             """
             schemaVersion=1
             enabled=true
+            strictStringCoverage=true
             runtimeTarget=x86_64-unknown-linux-gnu
             inputClasses=5
             eligibleClasses=4
             matchedClasses=2
             skippedClasses=2
+            stringCandidates=10
             protectedStrings=7
+            skippedStrings=3
+            strictViolations=3
+            coverageUnknowns=1
+            skippedEmptyStrings=1
+            skippedOversizedStrings=0
+            skippedAnnotationStrings=2
+            skippedConstantDynamicStrings=0
+            skippedDisabledStringConcats=0
+            skippedUnsupportedStringConcats=0
+            skippedUnsupportedInvokeDynamics=0
+            skippedUnsupportedFieldStrings=0
             removedMetadata=1
             unmatchedKeepStringPackages=sample/unused
             unmatchedKeepMetadataPackages=sample/metadata

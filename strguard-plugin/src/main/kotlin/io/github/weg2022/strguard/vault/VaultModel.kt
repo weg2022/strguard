@@ -6,6 +6,7 @@ internal data class BridgeModel(
     val methodNames: List<String>,
     val nativeLibraryResourcePath: String,
     val nativeLibraryFileName: String,
+    val artifactMetadataResourcePath: String,
     val nativeLibraryLoadName: String,
     val extractFromResources: Boolean,
 )
@@ -15,6 +16,14 @@ internal data class VaultReference(
     val capabilityLow: Long,
     val gatewayIndex: Int,
 )
+
+internal sealed interface VaultProtectionResult {
+    data class Protected(val reference: VaultReference) : VaultProtectionResult
+
+    data object Empty : VaultProtectionResult
+
+    data object TooLarge : VaultProtectionResult
+}
 
 internal class VaultRecord(
     val capability: ByteArray,

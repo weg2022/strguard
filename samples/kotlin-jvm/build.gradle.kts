@@ -22,4 +22,5 @@ application {
 
 strGuard {
     stringGuardPackages.set(listOf("sample.kotlin"))
+    strictStringCoverage.set(true)
 }

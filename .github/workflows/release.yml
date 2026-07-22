@@ -244,7 +244,9 @@ jobs:
         run: |
           bash ./gradlew :strguard-plugin:build -PstrguardVersion="${VERSION}" --stacktrace
           mkdir -p release-artifacts
-          cp strguard-plugin/build/libs/*.jar release-artifacts/
+          cp "strguard-plugin/build/libs/strguard-plugin-${VERSION}.jar" release-artifacts/
+          cp "strguard-plugin/build/libs/strguard-plugin-${VERSION}-sources.jar" release-artifacts/
+          cp "strguard-plugin/build/libs/strguard-plugin-${VERSION}-javadoc.jar" release-artifacts/
           gh api "repos/${GITHUB_REPOSITORY}/dependency-graph/sbom" > release-artifacts/sbom-response.json
           jq -e '.sbom | .spdxVersion and .name and (.packages | type == "array")' \
             release-artifacts/sbom-response.json >/dev/null

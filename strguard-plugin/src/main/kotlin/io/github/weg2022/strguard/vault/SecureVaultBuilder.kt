@@ -1,5 +1,6 @@
 package io.github.weg2022.strguard.vault
 
+import io.github.weg2022.strguard.STRGUARD_ARTIFACT_MARKER_DIRECTORY
 import io.github.weg2022.strguard.VaultRuntimeTarget
 import io.github.weg2022.strguard.crypto.CryptoPrimitives
 import java.io.BufferedOutputStream
@@ -66,12 +67,11 @@ internal class SecureVaultBuilder(
             return records.size
         }
 
-    fun protect(rawValue: String, callSiteIdentity: String): VaultReference? {
+    fun protect(rawValue: String, callSiteIdentity: String): VaultProtectionResult {
         checkOpen()
+        if (rawValue.isEmpty()) return VaultProtectionResult.Empty
+        if (rawValue.length > MAX_PLAINTEXT_CODE_UNITS) return VaultProtectionResult.TooLarge
         val plaintext = CryptoPrimitives.utf16Le(rawValue)
-        if (plaintext.isEmpty() || plaintext.size > MAX_PLAINTEXT_BYTES) {
-            return null
-        }
         val callSiteBytes = CryptoPrimitives.utf8(callSiteIdentity)
         var recordKey: ByteArray? = null
         try {
@@ -122,10 +122,12 @@ internal class SecureVaultBuilder(
                     orderKey = orderKey,
                 )
 
-            return VaultReference(
-                capabilityHigh = CryptoPrimitives.longFromBigEndian(capability, 0),
-                capabilityLow = CryptoPrimitives.longFromBigEndian(capability, Long.SIZE_BYTES),
-                gatewayIndex = gatewayIndex,
+            return VaultProtectionResult.Protected(
+                VaultReference(
+                    capabilityHigh = CryptoPrimitives.longFromBigEndian(capability, 0),
+                    capabilityLow = CryptoPrimitives.longFromBigEndian(capability, Long.SIZE_BYTES),
+                    gatewayIndex = gatewayIndex,
+                ),
             )
         } finally {
             callSiteBytes.fill(0)
@@ -232,6 +234,8 @@ internal class SecureVaultBuilder(
             methodNames = methodNames,
             nativeLibraryResourcePath = runtimeTarget.packagedResourcePath(fileName),
             nativeLibraryFileName = fileName,
+            artifactMetadataResourcePath =
+            "$STRGUARD_ARTIFACT_MARKER_DIRECTORY/${CryptoPrimitives.hex(buildId)}.properties",
             nativeLibraryLoadName = runtimeTarget.libraryLoadName(librarySuffix),
             extractFromResources = runtimeTarget.runtimeFamily.extractFromResources,
         )
@@ -410,7 +414,7 @@ private const val KEY_SIZE = 32
 private const val KEY_SHARE_COUNT = 4
 private const val CAPABILITY_SIZE = 16
 private const val NONCE_SIZE = 12
-private const val MAX_PLAINTEXT_BYTES = 60_000
+private const val MAX_PLAINTEXT_CODE_UNITS = 30_000
 private val BUILD_ID_LABEL = CryptoPrimitives.utf8("strguard/v3/build-id")
 private val BUILD_KEY_LABEL = CryptoPrimitives.utf8("strguard/v3/build-key")
 private val CAPABILITY_LABEL = CryptoPrimitives.utf8("strguard/v3/capability")

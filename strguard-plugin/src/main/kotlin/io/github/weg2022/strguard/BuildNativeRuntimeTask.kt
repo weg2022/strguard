@@ -5,12 +5,11 @@ import org.gradle.api.GradleException
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.*
-import org.gradle.work.DisableCachingByDefault
 import java.nio.file.*
 import java.time.Duration
 import java.util.*
 
-@DisableCachingByDefault(because = "Native compiler reproducibility is validated separately per toolchain")
+@CacheableTask
 abstract class BuildNativeRuntimeTask : DefaultTask() {
     @get:InputDirectory
     @get:PathSensitive(PathSensitivity.RELATIVE)
@@ -37,11 +36,17 @@ abstract class BuildNativeRuntimeTask : DefaultTask() {
     @get:Input
     abstract val toolchainFingerprint: Property<String>
 
+    @get:Input
+    abstract val externalCargoConfigurationPresent: Property<Boolean>
+
     @get:Internal
     abstract val processRegistry: Property<NativeProcessRegistryService>
 
     init {
-        outputs.doNotCacheIf("StrGuard Native outputs contain build-specific key material") { true }
+        outputs.doNotCacheIf("External Cargo configuration may select untracked build tools") {
+            externalCargoConfigurationPresent.get()
+        }
+        outputs.upToDateWhen { !externalCargoConfigurationPresent.get() }
     }
 
     @TaskAction
@@ -57,12 +62,20 @@ abstract class BuildNativeRuntimeTask : DefaultTask() {
         val inputs = nativeInputDirectory.get().asFile.toPath().toAbsolutePath().normalize()
         val workspace = temporaryDir.toPath().resolve("native-runtime")
         val cargoTarget = temporaryDir.toPath().resolve("cargo-target")
+        val cargoHome = temporaryDir.toPath().resolve("cargo-home")
+        val privateHome = cargoHome.resolve("home")
         resetDirectory(workspace)
         resetDirectory(cargoTarget)
+        resetDirectory(cargoHome)
+        Files.createDirectories(privateHome)
         copyRuntimeTemplate(workspace)
         val environment =
             linkedMapOf(
                 "CARGO_TARGET_DIR" to cargoTarget.toAbsolutePath().toString(),
+                "CARGO_HOME" to cargoHome.toAbsolutePath().toString(),
+                "HOME" to privateHome.toAbsolutePath().toString(),
+                "USERPROFILE" to privateHome.toAbsolutePath().toString(),
+                "RUSTUP_HOME" to rustupHomeDirectory(),
                 "CARGO_INCREMENTAL" to "0",
                 "SOURCE_DATE_EPOCH" to "0",
             )

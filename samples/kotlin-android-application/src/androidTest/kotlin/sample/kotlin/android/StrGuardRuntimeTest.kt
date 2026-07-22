@@ -53,6 +53,13 @@ class StrGuardRuntimeTest {
             "prefix\u0000\uD800middle\uDC00\uD83D\uDE00suffix".toCharArray(),
             activity.specialUtf16().toCharArray(),
         )
+        assertEquals("kotlin-android-array-zero", activity.arrayValue(0))
+        assertEquals("kotlin-android-line-one\nkotlin-android-line-two", activity.arrayValue(1))
+        assertEquals("kotlin-android-unicode-\u4F60\u597D-\uD83D\uDE80", activity.arrayValue(2))
+        assertEquals("kotlin-android-when-zero", activity.whenValue(0))
+        assertEquals("kotlin-android-when-one\twith-tab", activity.whenValue(1))
+        assertEquals("kotlin-android-when-default", activity.whenValue(9))
+        assertEquals("kotlin-android-lambda-value", activity.lambdaValue())
 
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val launched =

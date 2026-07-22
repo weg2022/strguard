@@ -6,13 +6,17 @@ import kotlin.test.*
 
 class SensitiveTaskCachingTest {
     @Test
-    fun `seed-derived transform outputs cannot enter the Gradle Build Cache`() {
+    fun `deterministic consumer tasks support the Gradle Build Cache`() {
         listOf(
             TransformClassesTask::class.java,
             TransformAndroidClassesTask::class.java,
+            BuildNativeRuntimeTask::class.java,
+            BuildAndroidNativeRuntimeTask::class.java,
+            MergeStrGuardJniLibsTask::class.java,
+            VerifyStrGuardShrunkArtifactTask::class.java,
         ).forEach { taskType ->
-            assertNull(taskType.getAnnotation(CacheableTask::class.java))
-            assertNotNull(taskType.getAnnotation(DisableCachingByDefault::class.java))
+            assertNotNull(taskType.getAnnotation(CacheableTask::class.java), taskType.name)
+            assertNull(taskType.getAnnotation(DisableCachingByDefault::class.java), taskType.name)
         }
     }
 }

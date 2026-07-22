@@ -1,20 +1,15 @@
 package io.github.weg2022.strguard
 
 import io.github.weg2022.strguard.vault.SecureVaultBuilder
+import io.github.weg2022.strguard.vault.VaultProtectionResult
 import io.github.weg2022.strguard.vault.VaultReference
-import org.objectweb.asm.AnnotationVisitor
-import org.objectweb.asm.ClassReader
-import org.objectweb.asm.ClassVisitor
-import org.objectweb.asm.ClassWriter
-import org.objectweb.asm.Handle
-import org.objectweb.asm.MethodVisitor
-import org.objectweb.asm.Opcodes
-import org.objectweb.asm.Type
+import org.objectweb.asm.*
 import org.objectweb.asm.commons.LocalVariablesSorter
 
-internal data class ClassTransformResult(
+internal class ClassTransformResult(
     val bytes: ByteArray,
     val metadataMappings: Set<String>,
+    val stringCoverage: StringCoverage,
 )
 
 internal object ClassTransformer {
@@ -26,18 +21,21 @@ internal object ClassTransformer {
         val classReader = ClassReader(classBytes)
         val exclusions = ClassExclusions.scan(classBytes)
         val className = classReader.className
+        val stringCoverage = MutableStringCoverage()
         val visitor =
             StringObfuscationClassVisitor(
                 settings = settings,
                 processStrings = settings.shouldTransformStrings(className) && !exclusions.keepStrings,
                 processMetadata = settings.shouldRemoveMetadata(className) && !exclusions.keepMetadata,
                 vaultBuilder = vaultBuilder,
+                stringCoverage = stringCoverage,
                 delegate = MaxsComputingClassWriter(),
             )
         classReader.accept(visitor, ClassReader.EXPAND_FRAMES)
         return ClassTransformResult(
             bytes = visitor.toByteArray(),
             metadataMappings = visitor.metadataMappings(),
+            stringCoverage = stringCoverage.snapshot(),
         )
     }
 }
@@ -67,13 +65,14 @@ private data class ClassExclusions(
     }
 }
 
-private class MaxsComputingClassWriter : ClassWriter(ClassWriter.COMPUTE_MAXS)
+private class MaxsComputingClassWriter : ClassWriter(COMPUTE_MAXS)
 
 private class StringObfuscationClassVisitor(
     private val settings: TransformSettings,
     private val processStrings: Boolean,
     private val processMetadata: Boolean,
     private val vaultBuilder: SecureVaultBuilder,
+    private val stringCoverage: MutableStringCoverage,
     delegate: ClassWriter,
 ) : ClassVisitor(Opcodes.ASM9, delegate) {
     private val staticFinalFields = mutableListOf<StaticStringField>()
@@ -94,11 +93,35 @@ private class StringObfuscationClassVisitor(
     }
 
     override fun visitAnnotation(descriptor: String?, visible: Boolean): AnnotationVisitor? {
-        if (processMetadata && descriptor in KOTLIN_METADATA_ANNOTATIONS) {
-            removedMetadata += "$className $descriptor"
-            return null
+        if (descriptor in KOTLIN_METADATA_ANNOTATIONS) {
+            if (processMetadata) {
+                removedMetadata += "$className $descriptor"
+                return null
+            }
+            return super.visitAnnotation(descriptor, visible)
         }
-        return super.visitAnnotation(descriptor, visible)
+        return trackedAnnotation(super.visitAnnotation(descriptor, visible))
+    }
+
+    override fun visitTypeAnnotation(
+        typeRef: Int,
+        typePath: TypePath?,
+        descriptor: String?,
+        visible: Boolean,
+    ): AnnotationVisitor? = trackedAnnotation(super.visitTypeAnnotation(typeRef, typePath, descriptor, visible))
+
+    override fun visitRecordComponent(
+        name: String?,
+        descriptor: String?,
+        signature: String?,
+    ): RecordComponentVisitor? {
+        val delegate = super.visitRecordComponent(name, descriptor, signature)
+        return if (processStrings && delegate != null) TrackingRecordComponentVisitor(delegate) else delegate
+    }
+
+    override fun visitAttribute(attribute: Attribute?) {
+        if (processStrings && attribute != null) stringCoverage.recordUnknownAttribute()
+        super.visitAttribute(attribute)
     }
 
     override fun visitField(
@@ -107,23 +130,21 @@ private class StringObfuscationClassVisitor(
         descriptor: String?,
         signature: String?,
         value: Any?,
-    ): org.objectweb.asm.FieldVisitor? {
+    ): FieldVisitor? {
         var outputValue = value
-        if (
-            processStrings &&
-            descriptor == STRING_DESCRIPTOR &&
-            name != null &&
-            value is String &&
-            access and Opcodes.ACC_STATIC != 0 &&
-            access and Opcodes.ACC_FINAL != 0
-        ) {
-            val reference = vaultBuilder.protect(value, "$className#field:$name")
-            if (reference != null) {
-                staticFinalFields += StaticStringField(name, reference)
-                outputValue = null
+        if (processStrings && descriptor == STRING_DESCRIPTOR && name != null && value is String) {
+            if (access and Opcodes.ACC_STATIC != 0 && access and Opcodes.ACC_FINAL != 0) {
+                val reference = protect(value, "$className#field:$name")
+                if (reference != null) {
+                    staticFinalFields += StaticStringField(name, reference)
+                    outputValue = null
+                }
+            } else {
+                stringCoverage.recordSkipped(value, StringSkipReason.UNSUPPORTED_FIELD_STRING)
             }
         }
-        return super.visitField(access, name, descriptor, signature, outputValue)
+        val delegate = super.visitField(access, name, descriptor, signature, outputValue)
+        return if (processStrings && delegate != null) TrackingFieldVisitor(delegate) else delegate
     }
 
     override fun visitMethod(
@@ -169,6 +190,25 @@ private class StringObfuscationClassVisitor(
 
     fun metadataMappings(): Set<String> = removedMetadata
 
+    private fun protect(rawValue: String, callSiteIdentity: String): VaultReference? = when (val result = vaultBuilder.protect(rawValue, callSiteIdentity)) {
+        is VaultProtectionResult.Protected -> {
+            stringCoverage.recordProtected()
+            result.reference
+        }
+
+        VaultProtectionResult.Empty -> {
+            stringCoverage.recordSkipped(StringSkipReason.EMPTY_STRING)
+            null
+        }
+
+        VaultProtectionResult.TooLarge -> {
+            stringCoverage.recordSkipped(StringSkipReason.OVERSIZED_STRING)
+            null
+        }
+    }
+
+    private fun trackedAnnotation(delegate: AnnotationVisitor?): AnnotationVisitor? = if (processStrings && delegate != null) TrackingAnnotationVisitor(delegate) else delegate
+
     private fun writeVaultReference(methodVisitor: MethodVisitor, reference: VaultReference) {
         methodVisitor.visitLdcInsn(reference.capabilityHigh)
         methodVisitor.visitLdcInsn(reference.capabilityLow)
@@ -204,6 +244,9 @@ private class StringObfuscationClassVisitor(
             if (value is String && protectAndWrite(value, "ldc")) {
                 return
             }
+            if (value is ConstantDynamic) {
+                recordConstantDynamic(value)
+            }
             super.visitLdcInsn(value)
         }
 
@@ -215,6 +258,7 @@ private class StringObfuscationClassVisitor(
         ) {
             val recipe = stringConcatRecipe(name, descriptor, bootstrapMethodHandle, bootstrapMethodArguments)
             if (recipe == null || descriptor == null) {
+                recordUnsupportedInvokeDynamic(bootstrapMethodHandle, bootstrapMethodArguments)
                 super.visitInvokeDynamicInsn(name, descriptor, bootstrapMethodHandle, *bootstrapMethodArguments)
                 return
             }
@@ -394,9 +438,168 @@ private class StringObfuscationClassVisitor(
 
         private fun protectAndWrite(rawValue: String, kind: String): Boolean {
             val callSiteIdentity = "$className#$methodName$descriptor:$kind:${callSiteOrdinal++}"
-            val reference = vaultBuilder.protect(rawValue, callSiteIdentity) ?: return false
+            val reference = protect(rawValue, callSiteIdentity) ?: return false
             writeVaultReference(this, reference)
             return true
+        }
+
+        override fun visitAnnotationDefault(): AnnotationVisitor? = trackedAnnotation(super.visitAnnotationDefault())
+
+        override fun visitAnnotation(descriptor: String?, visible: Boolean): AnnotationVisitor? = trackedAnnotation(super.visitAnnotation(descriptor, visible))
+
+        override fun visitTypeAnnotation(
+            typeRef: Int,
+            typePath: TypePath?,
+            descriptor: String?,
+            visible: Boolean,
+        ): AnnotationVisitor? = trackedAnnotation(super.visitTypeAnnotation(typeRef, typePath, descriptor, visible))
+
+        override fun visitParameterAnnotation(
+            parameter: Int,
+            descriptor: String?,
+            visible: Boolean,
+        ): AnnotationVisitor? = trackedAnnotation(super.visitParameterAnnotation(parameter, descriptor, visible))
+
+        override fun visitInsnAnnotation(
+            typeRef: Int,
+            typePath: TypePath?,
+            descriptor: String?,
+            visible: Boolean,
+        ): AnnotationVisitor? = trackedAnnotation(super.visitInsnAnnotation(typeRef, typePath, descriptor, visible))
+
+        override fun visitTryCatchAnnotation(
+            typeRef: Int,
+            typePath: TypePath?,
+            descriptor: String?,
+            visible: Boolean,
+        ): AnnotationVisitor? = trackedAnnotation(super.visitTryCatchAnnotation(typeRef, typePath, descriptor, visible))
+
+        override fun visitLocalVariableAnnotation(
+            typeRef: Int,
+            typePath: TypePath?,
+            start: Array<out Label>?,
+            end: Array<out Label>?,
+            index: IntArray?,
+            descriptor: String?,
+            visible: Boolean,
+        ): AnnotationVisitor? = trackedAnnotation(
+            super.visitLocalVariableAnnotation(
+                typeRef,
+                typePath,
+                start,
+                end,
+                index,
+                descriptor,
+                visible,
+            ),
+        )
+
+        override fun visitAttribute(attribute: Attribute?) {
+            if (attribute != null) stringCoverage.recordUnknownAttribute()
+            super.visitAttribute(attribute)
+        }
+
+        private fun recordUnsupportedInvokeDynamic(
+            bootstrapMethodHandle: Handle?,
+            bootstrapMethodArguments: Array<out Any?>,
+        ) {
+            val isStringConcat = isStringConcatFactory(bootstrapMethodHandle)
+            val reason =
+                when {
+                    isStringConcat && !settings.java9StringConcatEnabled -> StringSkipReason.DISABLED_STRING_CONCAT
+                    isStringConcat -> StringSkipReason.UNSUPPORTED_STRING_CONCAT
+                    else -> StringSkipReason.UNSUPPORTED_INVOKEDYNAMIC
+                }
+            if (isStringConcat) {
+                val recipe = bootstrapMethodArguments.firstOrNull() as? String
+                if (recipe != null) {
+                    recordRecipeLiterals(recipe, reason)
+                    bootstrapMethodArguments.drop(1).forEach { argument ->
+                        recordBootstrapString(argument, reason)
+                    }
+                    return
+                }
+            }
+            bootstrapMethodArguments.forEach { argument -> recordBootstrapString(argument, reason) }
+        }
+
+        private fun recordRecipeLiterals(recipe: String, reason: StringSkipReason) {
+            val literal = StringBuilder()
+            recipe.forEach { character ->
+                if (character == DYNAMIC_ARGUMENT_MARKER || character == STATIC_ARGUMENT_MARKER) {
+                    if (literal.isNotEmpty()) {
+                        stringCoverage.recordSkipped(literal.toString(), reason)
+                        literal.setLength(0)
+                    }
+                } else {
+                    literal.append(character)
+                }
+            }
+            if (literal.isNotEmpty()) stringCoverage.recordSkipped(literal.toString(), reason)
+        }
+
+        private fun recordBootstrapString(value: Any?, reason: StringSkipReason) {
+            when (value) {
+                is String -> stringCoverage.recordSkipped(value, reason)
+                is ConstantDynamic -> recordConstantDynamic(value)
+            }
+        }
+
+        private fun recordConstantDynamic(value: ConstantDynamic) {
+            if (value.descriptor == STRING_DESCRIPTOR) {
+                stringCoverage.recordSkipped(StringSkipReason.CONSTANT_DYNAMIC)
+            }
+            for (index in 0 until value.bootstrapMethodArgumentCount) {
+                recordBootstrapString(
+                    value.getBootstrapMethodArgument(index),
+                    StringSkipReason.CONSTANT_DYNAMIC,
+                )
+            }
+        }
+    }
+
+    private inner class TrackingAnnotationVisitor(delegate: AnnotationVisitor) : AnnotationVisitor(Opcodes.ASM9, delegate) {
+        override fun visit(name: String?, value: Any?) {
+            if (value is String) {
+                stringCoverage.recordSkipped(value, StringSkipReason.ANNOTATION_STRING)
+            }
+            super.visit(name, value)
+        }
+
+        override fun visitAnnotation(name: String?, descriptor: String?): AnnotationVisitor? = trackedAnnotation(super.visitAnnotation(name, descriptor))
+
+        override fun visitArray(name: String?): AnnotationVisitor? = trackedAnnotation(super.visitArray(name))
+    }
+
+    private inner class TrackingFieldVisitor(delegate: FieldVisitor) : FieldVisitor(Opcodes.ASM9, delegate) {
+        override fun visitAnnotation(descriptor: String?, visible: Boolean): AnnotationVisitor? = trackedAnnotation(super.visitAnnotation(descriptor, visible))
+
+        override fun visitTypeAnnotation(
+            typeRef: Int,
+            typePath: TypePath?,
+            descriptor: String?,
+            visible: Boolean,
+        ): AnnotationVisitor? = trackedAnnotation(super.visitTypeAnnotation(typeRef, typePath, descriptor, visible))
+
+        override fun visitAttribute(attribute: Attribute?) {
+            if (attribute != null) stringCoverage.recordUnknownAttribute()
+            super.visitAttribute(attribute)
+        }
+    }
+
+    private inner class TrackingRecordComponentVisitor(delegate: RecordComponentVisitor) : RecordComponentVisitor(Opcodes.ASM9, delegate) {
+        override fun visitAnnotation(descriptor: String?, visible: Boolean): AnnotationVisitor? = trackedAnnotation(super.visitAnnotation(descriptor, visible))
+
+        override fun visitTypeAnnotation(
+            typeRef: Int,
+            typePath: TypePath?,
+            descriptor: String?,
+            visible: Boolean,
+        ): AnnotationVisitor? = trackedAnnotation(super.visitTypeAnnotation(typeRef, typePath, descriptor, visible))
+
+        override fun visitAttribute(attribute: Attribute?) {
+            if (attribute != null) stringCoverage.recordUnknownAttribute()
+            super.visitAttribute(attribute)
         }
     }
 }
@@ -417,3 +620,8 @@ private val KOTLIN_METADATA_ANNOTATIONS =
         "Lkotlin/coroutines/jvm/internal/DebugMetadata;",
         "Lkotlin/jvm/internal/SourceDebugExtension;",
     )
+
+private fun isStringConcatFactory(bootstrapMethodHandle: Handle?): Boolean = bootstrapMethodHandle != null &&
+    bootstrapMethodHandle.tag == Opcodes.H_INVOKESTATIC &&
+    bootstrapMethodHandle.owner == STRING_CONCAT_FACTORY &&
+    bootstrapMethodHandle.name == "makeConcatWithConstants"
