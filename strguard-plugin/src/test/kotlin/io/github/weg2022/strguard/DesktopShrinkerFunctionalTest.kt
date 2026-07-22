@@ -684,7 +684,7 @@ class DesktopShrinkerFunctionalTest {
             ),
         )
         val markers =
-            Files.walk(projectDirectory.resolve("build")).use { paths ->
+            Files.walk(projectDirectory.resolve("build/compose/tmp/main-release/proguard")).use { paths ->
                 paths.iterator().asSequence()
                     .filter { path -> Files.isRegularFile(path) && path.fileName.toString().endsWith(".jar") }
                     .flatMap { jarPath ->
