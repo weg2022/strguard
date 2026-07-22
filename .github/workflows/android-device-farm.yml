@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  STRGUARD_RELEASE_SEED_HEX: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  STRGUARD_CI_FIXED_SEED_HEX: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
   ANDROID_NDK_VERSION: 27.2.12479018
   RUST_TOOLCHAIN: 1.94.1
 
@@ -60,6 +60,8 @@ jobs:
           targets: armv7-linux-androideabi,aarch64-linux-android,i686-linux-android,x86_64-linux-android
       - uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6
       - name: Build APKs
+        env:
+          STRGUARD_RELEASE_SEED_HEX: ${{ env.STRGUARD_CI_FIXED_SEED_HEX }}
         run: >-
           bash ./gradlew -p samples/kotlin-android-application
           assembleRelease assembleReleaseAndroidTest --stacktrace

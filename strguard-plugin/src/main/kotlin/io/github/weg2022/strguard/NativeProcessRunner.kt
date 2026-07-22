@@ -116,6 +116,22 @@ internal fun nativeProcessEnvironment(extra: Map<String, String>): Map<String, S
     return sanitized
 }
 
+internal fun encodedReproducibleRustFlags(buildRoot: java.nio.file.Path, targetTriple: String): String {
+    val normalizedRoot = buildRoot.toAbsolutePath().normalize().toString()
+    val flags =
+        mutableListOf(
+            "--remap-path-prefix=$normalizedRoot=strguard-native",
+        )
+    val portableRoot = normalizedRoot.replace('\\', '/')
+    if (portableRoot != normalizedRoot) {
+        flags += "--remap-path-prefix=$portableRoot=strguard-native"
+    }
+    if (targetTriple.endsWith("-pc-windows-msvc")) {
+        flags += "-Clink-arg=/Brepro"
+    }
+    return flags.joinToString(RUSTFLAGS_SEPARATOR)
+}
+
 internal fun rustupHomeDirectory(): String {
     val configured = System.getenv("RUSTUP_HOME")
     if (!configured.isNullOrBlank()) return java.nio.file.Path.of(configured).toAbsolutePath().normalize().toString()
@@ -160,5 +176,6 @@ private val NATIVE_ENVIRONMENT_ALLOWLIST =
     )
 private const val DEFAULT_NATIVE_LOG_CAPACITY = 256 * 1024
 private const val RELEASE_SEED_ENVIRONMENT_VARIABLE = "STRGUARD_RELEASE_SEED_HEX"
+private const val RUSTFLAGS_SEPARATOR = "\u001f"
 private val NATIVE_PROCESS_TERMINATION_GRACE = Duration.ofSeconds(5)
 private val NATIVE_READER_JOIN_TIMEOUT = Duration.ofSeconds(5)

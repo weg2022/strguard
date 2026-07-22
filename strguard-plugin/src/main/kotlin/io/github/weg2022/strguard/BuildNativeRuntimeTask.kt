@@ -77,6 +77,7 @@ abstract class BuildNativeRuntimeTask : DefaultTask() {
                 "USERPROFILE" to privateHome.toAbsolutePath().toString(),
                 "RUSTUP_HOME" to rustupHomeDirectory(),
                 "CARGO_INCREMENTAL" to "0",
+                "CARGO_ENCODED_RUSTFLAGS" to encodedReproducibleRustFlags(temporaryDir.toPath(), target),
                 "SOURCE_DATE_EPOCH" to "0",
             )
         findMsvcToolchain(nativeTarget)?.let { toolchain ->

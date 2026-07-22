@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  STRGUARD_RELEASE_SEED_HEX: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  STRGUARD_CI_FIXED_SEED_HEX: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
   RUST_TOOLCHAIN: 1.94.1
   ANDROID_NDK_VERSION: 27.2.12479018
 
@@ -149,7 +149,10 @@ jobs:
             --fail-under-functions 85 \
             --fail-under-lines 85 \
             --fail-under-regions 85
-          bash .github/scripts/verify-reproducible.sh
+      - name: Re-run reproducibility gate
+        env:
+          STRGUARD_RELEASE_SEED_HEX: ${{ env.STRGUARD_CI_FIXED_SEED_HEX }}
+        run: bash .github/scripts/verify-reproducible.sh
       - name: Publish Gradle plugin
         env:
           GRADLE_PUBLISH_KEY: ${{ secrets.GRADLE_PUBLISH_KEY }}
@@ -160,6 +163,7 @@ jobs:
           -PstrguardVersion="${VERSION}" --stacktrace
       - name: Verify external Plugin Portal resolution
         env:
+          STRGUARD_RELEASE_SEED_HEX: ${{ env.STRGUARD_CI_FIXED_SEED_HEX }}
           VERSION: ${{ inputs.version }}
         shell: bash
         run: |

@@ -45,6 +45,23 @@ class NativeProcessRunnerTest {
     }
 
     @Test
+    fun `reproducible Rust flags remap task paths and stabilize MSVC linking`() {
+        val buildRoot = temporaryDirectory.resolve("native build root")
+        val normalizedRoot = buildRoot.toAbsolutePath().normalize().toString()
+        val portableRoot = normalizedRoot.replace('\\', '/')
+
+        val linuxFlags = encodedReproducibleRustFlags(buildRoot, "x86_64-unknown-linux-gnu").split('\u001f')
+        assertEquals("--remap-path-prefix=$normalizedRoot=strguard-native", linuxFlags.first())
+        if (portableRoot != normalizedRoot) {
+            assertEquals("--remap-path-prefix=$portableRoot=strguard-native", linuxFlags.single { portableRoot in it })
+        }
+        assertFalse(linuxFlags.any { it.contains("link-arg") })
+
+        val windowsFlags = encodedReproducibleRustFlags(buildRoot, "x86_64-pc-windows-msvc").split('\u001f')
+        assertEquals("-Clink-arg=/Brepro", windowsFlags.last())
+    }
+
+    @Test
     fun `runner times out and terminates the process`() {
         val failure =
             assertFailsWith<GradleException> {
@@ -126,8 +143,7 @@ class NativeProcessRunnerTest {
             }
         worker.start()
         val pidFile = temporaryDirectory.resolve("process.pid")
-        waitForFile(pidFile)
-        val processPid = Files.readString(pidFile).trim().toLong()
+        val processPid = waitForProcessId(pidFile)
 
         worker.interrupt()
         worker.join(10_000)
@@ -194,12 +210,16 @@ class NativeProcessRunnerTest {
         mode,
     )
 
-    private fun waitForFile(path: Path) {
+    private fun waitForProcessId(path: Path): Long {
         repeat(100) {
-            if (Files.isRegularFile(path)) return
+            if (Files.isRegularFile(path)) {
+                runCatching { Files.readString(path).trim().toLongOrNull() }
+                    .getOrNull()
+                    ?.let { pid -> return pid }
+            }
             Thread.sleep(50)
         }
-        throw AssertionError("Process fixture did not create $path")
+        throw AssertionError("Process fixture did not write a valid PID to $path")
     }
 
     private fun assertProcessStops(pid: Long) {

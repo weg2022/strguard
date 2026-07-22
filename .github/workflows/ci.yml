@@ -16,7 +16,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  STRGUARD_RELEASE_SEED_HEX: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  STRGUARD_CI_FIXED_SEED_HEX: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
   RUST_TOOLCHAIN: 1.94.1
   ANDROID_NDK_VERSION: 27.2.12479018
 
@@ -144,6 +144,8 @@ jobs:
           --stacktrace
       - name: Build and run public Desktop samples
         if: matrix.target == 'x86_64-unknown-linux-gnu'
+        env:
+          STRGUARD_RELEASE_SEED_HEX: ${{ env.STRGUARD_CI_FIXED_SEED_HEX }}
         shell: bash
         run: |
           bash ./gradlew -p samples/java build --stacktrace
@@ -214,6 +216,8 @@ jobs:
           --tests "io.github.weg2022.strguard.AndroidMultiModulePackagingFunctionalTest"
           --stacktrace
       - name: Build public Android samples and instrumentation APK
+        env:
+          STRGUARD_RELEASE_SEED_HEX: ${{ env.STRGUARD_CI_FIXED_SEED_HEX }}
         shell: bash
         run: |
           bash ./gradlew -p samples/android-application assembleDebug --stacktrace
@@ -240,4 +244,6 @@ jobs:
           targets: x86_64-unknown-linux-gnu
       - uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6
       - name: Compare two clean checkouts byte for byte
+        env:
+          STRGUARD_RELEASE_SEED_HEX: ${{ env.STRGUARD_CI_FIXED_SEED_HEX }}
         run: bash .github/scripts/verify-reproducible.sh
