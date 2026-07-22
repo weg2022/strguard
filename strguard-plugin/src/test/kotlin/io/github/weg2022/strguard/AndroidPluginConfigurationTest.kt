@@ -380,11 +380,17 @@ class AndroidPluginConfigurationTest {
         paths.filter { Files.isRegularFile(it) && it.fileName.toString().endsWith(".jar") }
             .filter { candidate ->
                 runCatching {
-                    JarFile(candidate.toFile()).use { jar -> jar.getJarEntry(requiredEntry) != null }
+                    JarFile(candidate.toFile()).use { jar ->
+                        jar.getJarEntry(requiredEntry) != null &&
+                            jar.entries().asSequence().any {
+                                it.name.startsWith("io/github/weg2022/strguard/generated/B") &&
+                                    it.name.endsWith(".class")
+                            }
+                    }
                 }.getOrDefault(false)
             }
             .findFirst()
-            .orElseThrow { AssertionError("No transformed Android classes JAR contains $requiredEntry") }
+            .orElseThrow { AssertionError("No StrGuard-transformed Android classes JAR contains $requiredEntry") }
     }
 
     private fun projectRootPath(): String = Path.of(System.getProperty("user.dir")).toAbsolutePath().normalize().toString().replace("\\", "\\\\")
