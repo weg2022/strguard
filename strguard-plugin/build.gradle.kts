@@ -1,3 +1,4 @@
+import org.gradle.api.tasks.testing.logging.TestExceptionFormat
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
@@ -119,6 +120,7 @@ tasks.withType<JavaCompile>().configureEach {
 
 tasks.withType<Test>().configureEach {
     dependsOn(tasks.shadowJar)
+    workingDir(rootProject.layout.projectDirectory.asFile)
     doFirst {
         systemProperty(
             "strguard.shadowJar",
@@ -126,6 +128,9 @@ tasks.withType<Test>().configureEach {
         )
     }
     useJUnitPlatform()
+    testLogging {
+        exceptionFormat = TestExceptionFormat.FULL
+    }
     finalizedBy(tasks.jacocoTestReport)
 }
 

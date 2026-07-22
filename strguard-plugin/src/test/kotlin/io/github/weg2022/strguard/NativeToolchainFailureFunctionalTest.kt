@@ -41,11 +41,9 @@ class NativeToolchainFailureFunctionalTest {
             }
             """.trimIndent(),
         )
-        val emptyPath = Files.createDirectories(projectDirectory.resolve("empty-path")).toString()
+        val missingCargo = projectDirectory.resolve("missing-cargo-executable").toAbsolutePath().toString()
         val environment = System.getenv().toMutableMap()
-        environment.remove(CARGO_EXECUTABLE_ENVIRONMENT_VARIABLE)
-        val pathKey = environment.keys.firstOrNull { it.equals("PATH", ignoreCase = true) } ?: "PATH"
-        environment[pathKey] = emptyPath
+        environment[CARGO_EXECUTABLE_ENVIRONMENT_VARIABLE] = missingCargo
 
         val result =
             GradleRunner.create()
@@ -56,7 +54,7 @@ class NativeToolchainFailureFunctionalTest {
                 .forwardOutput()
                 .buildAndFail()
 
-        assertTrue(result.output.contains("cannot start Cargo executable 'cargo'"))
+        assertTrue(result.output.contains("cannot start Cargo executable '$missingCargo'"))
         assertTrue(result.output.contains("target ${hostNativeTarget().rustTriple}"))
         assertTrue(result.output.contains("rustup target add ${hostNativeTarget().rustTriple}"))
     }
