@@ -5,14 +5,13 @@
     <option name="linkedExternalProjectsSettings">
       <GradleProjectSettings>
         <option name="externalProjectPath" value="$PROJECT_DIR$" />
-        <option name="gradleJvm" value="temurin-23" />
         <option name="modules">
           <set>
             <option value="$PROJECT_DIR$" />
-            <option value="$PROJECT_DIR$/strguard-api" />
             <option value="$PROJECT_DIR$/strguard-plugin" />
           </set>
         </option>
+        <option name="myGradleHome" value="C:\Users\weg20\.gradle\wrapper\dists\gradle-9.5.0-bin\bvnork1r7n8i6kp5cnkibsc9q\gradle-9.5.0" />
       </GradleProjectSettings>
     </option>
   </component>
