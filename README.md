@@ -35,11 +35,11 @@ Supported plugin IDs are `java`, `java-library`, `application`, `org.jetbrains.k
 
 ## Installation
 
-Until `2.0.0` is published and passes the external Plugin Portal smoke gate, use this repository as a composite build. After GA is visible on the Portal, apply StrGuard to every JVM or Android module that owns compiled classes:
+Apply StrGuard from the Gradle Plugin Portal to every JVM or Android module that owns compiled classes:
 
 ```kotlin
 plugins {
-    id("io.github.weg2022.strguard") version "2.0.0"
+    id("io.github.weg2022.strguard") version "2.0.1"
 }
 ```
 

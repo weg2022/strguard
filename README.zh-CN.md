@@ -33,11 +33,11 @@ StrGuard 提供的是提高静态提取成本的 authenticated obfuscation，不
 
 ## 安装
 
-在 `2.0.0` 发布并通过外部 Plugin Portal smoke gate前，请使用 composite build。GA在 Portal可见后，在每个拥有编译 class的 JVM或 Android模块中应用：
+从 Gradle Plugin Portal 引入 StrGuard，并在每个拥有编译 class 的 JVM 或 Android 模块中应用：
 
 ```kotlin
 plugins {
-    id("io.github.weg2022.strguard") version "2.0.0"
+    id("io.github.weg2022.strguard") version "2.0.1"
 }
 ```
 
