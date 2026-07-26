@@ -221,15 +221,11 @@ cargo clippy --manifest-path native/strguard-runtime/Cargo.toml --all-targets --
 cargo test --manifest-path native/strguard-runtime/Cargo.toml --locked
 ```
 
-Set `STRGUARD_ANDROID_NATIVE_TEST=true` and `ANDROID_NDK_VERSION=27.2.12479018` to compile all four Android runtimes in functional tests. Local tests do not start an emulator; ART evidence comes from Firebase Test Lab.
+Set `STRGUARD_ANDROID_NATIVE_TEST=true` and `ANDROID_NDK_VERSION=27.2.12479018` to compile all four Android runtimes in functional tests. Local tests do not start an emulator.
 
-## CI and release
+## CI
 
-`ci.yml` covers JDK 17/21, Java 11, six Desktop runners, four-ABI Android/R8, Rust audit/deny/coverage/performance/RSS, reproducibility, dependency verification, distribution, and samples. `android-device-farm.yml` validates four actual ART process ABIs and runs normal and tampered-vault APKs.
-
-`release.yml` is a protected RC/GA workflow. GA requires the same RC commit to be observed for seven days with no open P0/P1 issues. It then re-runs assurance gates, tests external Portal JVM/Android consumers, exports an SPDX SBOM, writes checksums, and creates the immutable tag and GitHub Release.
-
-The repository must configure a protected `release` environment, Portal credentials, Google Workload Identity, the Test Lab project, and a four-entry `FIREBASE_DEVICE_MATRIX_JSON` containing API 21 and API 34+ coverage.
+`ci.yml` covers JDK 17/21, Java 11, six Desktop runners, four-ABI Android/R8, Rust audit/deny/coverage/performance/RSS, reproducibility, dependency verification, distribution, and samples.
 
 ## License
 

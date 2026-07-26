@@ -219,15 +219,11 @@ cargo clippy --manifest-path native/strguard-runtime/Cargo.toml --all-targets --
 cargo test --manifest-path native/strguard-runtime/Cargo.toml --locked
 ```
 
-设置 `STRGUARD_ANDROID_NATIVE_TEST=true` 和 `ANDROID_NDK_VERSION=27.2.12479018` 后，functional test会编译全部 4 个 Android runtime。本地测试不启动 emulator；ART证据由 Firebase Test Lab提供。
+设置 `STRGUARD_ANDROID_NATIVE_TEST=true` 和 `ANDROID_NDK_VERSION=27.2.12479018` 后，functional test 会编译全部 4 个 Android runtime。本地测试不启动 emulator。
 
-## CI与发布
+## CI
 
-`ci.yml` 覆盖 JDK 17/21、Java 11、6 个 Desktop runner、Android 4 ABI/R8、Rust audit/deny/coverage/performance/RSS、可复现性、dependency verification、distribution与 samples。`android-device-farm.yml` 验证 4 个实际 ART进程 ABI，并运行正常与 tampered-vault APK。
-
-`release.yml` 是受保护的 RC/GA workflow。GA要求同一 RC commit已观察 7 天且没有 open P0/P1 Issue，然后重跑 assurance gate、验证外部 Portal JVM/Android consumer、导出 SPDX SBOM、生成 checksum，最后创建 immutable tag与 GitHub Release。
-
-仓库必须配置受保护的 `release` environment、Portal Credential、Google Workload Identity、Test Lab project，以及覆盖 API 21与 API 34+的 4-entry `FIREBASE_DEVICE_MATRIX_JSON`。
+`ci.yml` 覆盖 JDK 17/21、Java 11、6 个 Desktop runner、Android 4 ABI/R8、Rust audit/deny/coverage/performance/RSS、可复现性、dependency verification、distribution 与 samples。
 
 ## License
 

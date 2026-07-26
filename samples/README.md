@@ -40,4 +40,4 @@ rustup target add armv7-linux-androideabi aarch64-linux-android i686-linux-andro
 .\gradlew.bat -p samples/kotlin-android-application assembleDebug
 ```
 
-The Kotlin Android sample packages all four official ABIs and includes an AndroidX instrumentation test for JNI loading, the complex string matrix, literal identity, concurrency, and UTF-16. Run it through the Firebase device-farm workflow; local sample commands do not start an emulator. All Android samples use `minSdk = 21`.
+The Kotlin Android sample packages all four official ABIs and includes an AndroidX instrumentation test for JNI loading, the complex string matrix, literal identity, concurrency, and UTF-16. CI compiles the instrumentation APK; local sample commands do not start an emulator. All Android samples use `minSdk = 21`.
