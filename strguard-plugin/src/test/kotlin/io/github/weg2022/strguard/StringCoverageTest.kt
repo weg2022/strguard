@@ -2,6 +2,8 @@ package io.github.weg2022.strguard
 
 import io.github.weg2022.strguard.crypto.CryptoPrimitives
 import io.github.weg2022.strguard.vault.SecureVaultBuilder
+import org.objectweb.asm.Attribute
+import org.objectweb.asm.ByteVector
 import org.objectweb.asm.ClassWriter
 import org.objectweb.asm.ConstantDynamic
 import org.objectweb.asm.Handle
@@ -10,6 +12,44 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 class StringCoverageTest {
+    @Test
+    fun `unknown attributes count as coverage unknowns`() {
+        val original = unknownAttributeFixture()
+        val builder =
+            SecureVaultBuilder(
+                COVERAGE_TEST_SEED,
+                "io.github.weg2022:string-coverage::unknown-attribute",
+                CryptoPrimitives.sha256(original),
+                JvmNativeTarget.WINDOWS_X64,
+            )
+        val settings = testSettings()
+
+        builder.use { vault ->
+            val result = ClassTransformer.transform(original, settings, vault)
+            assertEquals(1, result.stringCoverage.coverageUnknowns)
+            assertEquals(1, result.stringCoverage.strictViolations)
+        }
+    }
+
+    private fun testSettings(): TransformSettings = TransformSettings(
+        enabled = true,
+        java9StringConcatEnabled = true,
+        strictStringCoverage = true,
+        removeMetadata = false,
+        stringGuardPackages = listOf("sample"),
+        keepStringPackages = emptyList(),
+        removeMetadataPackages = emptyList(),
+        keepMetadataPackages = emptyList(),
+    )
+
+    private fun unknownAttributeFixture(): ByteArray {
+        val writer = ClassWriter(ClassWriter.COMPUTE_MAXS)
+        writer.visit(Opcodes.V11, Opcodes.ACC_PUBLIC, "sample/AttributeFixture", null, "java/lang/Object", null)
+        writer.visitAttribute(SampleAttribute())
+        writer.visitEnd()
+        return writer.toByteArray()
+    }
+
     @Test
     fun `disabled StringConcatFactory reports every literal and static string fragment`() {
         val original = disabledStringConcatFixture()
@@ -221,3 +261,13 @@ class StringCoverageTest {
 
 private const val COVERAGE_TEST_SEED =
     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+private class SampleAttribute : Attribute("SampleAttr") {
+    override fun write(
+        classWriter: ClassWriter,
+        code: ByteArray?,
+        codeLength: Int,
+        maxStack: Int,
+        maxLocals: Int,
+    ): ByteVector = ByteVector().putShort(0)
+}
