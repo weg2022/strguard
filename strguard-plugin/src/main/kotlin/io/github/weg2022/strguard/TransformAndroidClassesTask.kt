@@ -10,6 +10,7 @@ import org.gradle.api.provider.Property
 import org.gradle.api.tasks.*
 import org.objectweb.asm.ClassReader
 import java.io.BufferedOutputStream
+import java.net.URLClassLoader
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.StandardCharsets
@@ -90,6 +91,16 @@ abstract class TransformAndroidClassesTask : DefaultTask() {
                 keepMetadataPackages = keepMetadataPackages.get(),
             )
         val entries = collectEntries()
+        // COMPUTE_FRAMES 合并帧时需要加载项目类型(见 FramesComputingClassWriter)：
+        // 从输入 jar 与目录构建 URLClassLoader,parent 为 StrGuard 自身类加载器。
+        val androidClassLoader =
+            URLClassLoader(
+                (
+                    inputJars.get().map { jar -> jar.asFile.toURI().toURL() } +
+                        inputDirectories.get().map { directory -> directory.asFile.toURI().toURL() }
+                    ).toTypedArray(),
+                this::class.java.classLoader,
+            )
         val output = outputJar.get().asFile.toPath()
         val nativeInputsOutput = nativeInputDirectory.get().asFile.toPath()
         val reportsOutput = reportDirectory.get().asFile.toPath()
@@ -148,7 +159,7 @@ abstract class TransformAndroidClassesTask : DefaultTask() {
                     if (entryName.endsWith(CLASS_SUFFIX)) {
                         val className = ClassReader(originalBytes).className
                         if (settings.shouldTransformClass(className)) {
-                            val result = ClassTransformer.transform(originalBytes, settings, builder)
+                            val result = ClassTransformer.transform(originalBytes, settings, builder, androidClassLoader)
                             metadataMappings.addAll(result.metadataMappings)
                             stringCoverage = stringCoverage.plus(result.stringCoverage)
                             result.bytes

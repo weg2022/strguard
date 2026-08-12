@@ -10,6 +10,7 @@ import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.*
 import org.objectweb.asm.ClassReader
+import java.net.URLClassLoader
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
@@ -83,6 +84,16 @@ abstract class TransformClassesTask : DefaultTask() {
                 keepMetadataPackages = keepMetadataPackages.get(),
             )
         val sources = collectInputFiles()
+        // COMPUTE_FRAMES 合并帧时需要加载项目类型(见 FramesComputingClassWriter)：
+        // 从输入 class 目录构建 URLClassLoader,parent 为 StrGuard 自身类加载器,
+        // 因此 JDK/依赖类走 parent,项目类走输入目录。
+        val projectClassLoader =
+            URLClassLoader(
+                inputClassDirectories.files
+                    .map { directory -> directory.toURI().toURL() }
+                    .toTypedArray(),
+                this::class.java.classLoader,
+            )
         val destinationOutput = outputDirectory.get().asFile.toPath()
         val nativeInputsOutput = nativeInputDirectory.get().asFile.toPath()
         val reportsOutput = reportDirectory.get().asFile.toPath()
@@ -142,7 +153,7 @@ abstract class TransformClassesTask : DefaultTask() {
                     val originalBytes = Files.readAllBytes(source.source)
                     val className = ClassReader(originalBytes).className
                     if (settings.shouldTransformClass(className)) {
-                        val result = ClassTransformer.transform(originalBytes, settings, builder)
+                        val result = ClassTransformer.transform(originalBytes, settings, builder, projectClassLoader)
                         metadataMappings.addAll(result.metadataMappings)
                         stringCoverage = stringCoverage.plus(result.stringCoverage)
                         Files.write(target, result.bytes)

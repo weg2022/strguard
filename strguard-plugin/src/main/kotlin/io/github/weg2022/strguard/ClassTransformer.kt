@@ -17,6 +17,7 @@ internal object ClassTransformer {
         classBytes: ByteArray,
         settings: TransformSettings,
         vaultBuilder: SecureVaultBuilder,
+        classLoader: ClassLoader,
     ): ClassTransformResult {
         val classReader = ClassReader(classBytes)
         val exclusions = ClassExclusions.scan(classBytes)
@@ -29,7 +30,7 @@ internal object ClassTransformer {
                 processMetadata = settings.shouldRemoveMetadata(className) && !exclusions.keepMetadata,
                 vaultBuilder = vaultBuilder,
                 stringCoverage = stringCoverage,
-                delegate = FramesComputingClassWriter(),
+                delegate = FramesComputingClassWriter(classLoader),
             )
         classReader.accept(visitor, ClassReader.EXPAND_FRAMES)
         return ClassTransformResult(
@@ -69,8 +70,36 @@ private data class ClassExclusions(
  * 转换会改写指令流（concat 重写引入新局部变量、LDC 替换为 gateway 调用），
  * 而 LocalVariablesSorter 修改后的帧在新布局下可能非法（分支目标帧声明了
  * 其他路径未初始化的变量类型导致 VerifyError），因此必须重算栈映射帧。
+ *
+ * COMPUTE_FRAMES 在合并帧时需要解析两个类型的公共父类：ASM 默认实现用
+ * ClassWriter 自己的类加载器（Gradle daemon）加载类型，项目自定义类
+ * （如应用源码中的 BatchTask）会 ClassNotFoundException。这里改为从
+ * 编译输出目录构建的 URLClassLoader 加载（见 TransformClassesTask），
+ * 加载失败的类型退化为 java/lang/Object —— 栈帧类型变宽仍能通过
+ * VerifyError 校验，仅在极端情况下丢失类型精度，不会产生非法字节码。
  */
-private class FramesComputingClassWriter : ClassWriter(COMPUTE_FRAMES)
+private class FramesComputingClassWriter(
+    private val classesClassLoader: ClassLoader,
+) : ClassWriter(COMPUTE_FRAMES) {
+    override fun getCommonSuperClass(type1: String, type2: String): String {
+        val first = loadClass(type1) ?: return "java/lang/Object"
+        val second = loadClass(type2) ?: return "java/lang/Object"
+        if (first.isAssignableFrom(second)) return type1
+        if (second.isAssignableFrom(first)) return type2
+        if (first.isInterface || second.isInterface) return "java/lang/Object"
+        var common = first
+        while (!common.isAssignableFrom(second)) {
+            common = common.superclass ?: return "java/lang/Object"
+        }
+        return common.name.replace('.', '/')
+    }
+
+    private fun loadClass(type: String): Class<*>? = try {
+        Class.forName(type.replace('/', '.'), false, classesClassLoader)
+    } catch (exception: ClassNotFoundException) {
+        null
+    }
+}
 
 private class StringObfuscationClassVisitor(
     private val settings: TransformSettings,
