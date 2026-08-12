@@ -131,6 +131,92 @@ class KotlinMultiplatformPluginFunctionalTest {
     }
 
     @Test
+    fun `Kotlin Multiplatform jvmJar stores and reuses the Gradle configuration cache`() {
+        val nativeTarget = hostNativeTarget()
+        writeFile(
+            "settings.gradle.kts",
+            """
+            pluginManagement {
+                includeBuild("${projectRootPath()}")
+                repositories {
+                    gradlePluginPortal()
+                    mavenCentral()
+                }
+            }
+            rootProject.name = "kmp-config-cache-consumer"
+            """.trimIndent(),
+        )
+        writeFile(
+            "build.gradle.kts",
+            """
+            plugins {
+                kotlin("multiplatform") version "2.4.10"
+                id("io.github.weg2022.strguard")
+            }
+
+            repositories {
+                mavenCentral()
+            }
+
+            kotlin {
+                jvm()
+                js(IR) {
+                    nodejs()
+                }
+            }
+
+            strGuard {
+                releaseSeedHex.set("$KMP_TEST_SEED")
+                targetTriple.set("${nativeTarget.rustTriple}")
+                stringGuardPackages.set(listOf("sample"))
+            }
+            """.trimIndent(),
+        )
+        writeFile(
+            "src/jvmMain/kotlin/sample/Main.kt",
+            """
+            package sample
+
+            fun reveal(value: String): String = "kmp-cc-prefix-${'$'}value-sensitive-suffix"
+            """.trimIndent(),
+        )
+
+        val first = runner("jvmJar", "--configuration-cache").build()
+        val second = runner("jvmJar", "--configuration-cache").build()
+
+        assertEquals(TaskOutcome.SUCCESS, first.task(":jvmJar")?.outcome)
+        // 第二次构建输入未变、输出已存在,jvmJar 复用执行历史为 UP-TO-DATE;
+        // 配置缓存复用由下方 "Reusing configuration cache." 断言覆盖。
+        assertEquals(TaskOutcome.UP_TO_DATE, second.task(":jvmJar")?.outcome)
+        assertFalse(
+            first.output.contains("Configuration cache entry discarded."),
+            "first run must store the configuration cache entry without problems",
+        )
+        assertTrue(second.output.contains("Reusing configuration cache."))
+        // 隐式 metadata target 不再打 pass-through 日志(仅首次构建有配置阶段输出,
+        // 配置缓存复用时不会重新配置项目,因此只断言 first)
+        assertFalse(first.output.contains("target 'metadata'"))
+        // 用户显式声明的非 JVM target 仍保留 pass-through 日志(与既有断言一致)
+        assertTrue(
+            first.output.contains(
+                "StrGuard pass-through: Kotlin Multiplatform target 'js' is not a JVM target",
+            ),
+        )
+        // exclude 语义回归:jar 中恰好只有一个 MainKt.class,且是 transform 后的版本
+        val artifact = projectDirectory.resolve("build/libs/kmp-config-cache-consumer-jvm.jar")
+        JarFile(artifact.toFile()).use { jar ->
+            assertEquals(
+                1,
+                jar.entries().asSequence().count { it.name == "sample/MainKt.class" },
+            )
+            val classText =
+                jar.getInputStream(jar.getJarEntry("sample/MainKt.class"))
+                    .readBytes().toString(StandardCharsets.ISO_8859_1)
+            assertFalse(classText.contains("sensitive-suffix"))
+        }
+    }
+
+    @Test
     fun `protects Kotlin Multiplatform Android target through AGP variants`() {
         val sdkDirectory = findKmpAndroidSdk()
         assumeTrue(sdkDirectory != null, "Android SDK is not available for KMP Android testing")

@@ -35,7 +35,10 @@ internal object KotlinMultiplatformAdapter {
                         compilation,
                     )
                 }
-            } else {
+            } else if (target.name != "metadata") {
+                // metadata 是 KMP 自动创建、用户无法移除的内部占位 target,每次构建都会走到这里;
+                // 静默它,避免误导性的 pass-through 噪音。js/native 等用户显式声明的 target
+                // 保留 lifecycle 提示仍有价值。
                 project.logger.lifecycle(
                     "StrGuard pass-through: Kotlin Multiplatform target '${target.name}' is not a JVM target; " +
                         "no transform or Native task is registered.",
@@ -161,13 +164,20 @@ internal object KotlinMultiplatformAdapter {
 
         val transformedClasses = project.files(transformTask.flatMap { it.outputDirectory })
         val nativeResources = project.files(nativeTask.flatMap { it.outputDirectory })
+        // 配置缓存安全性:exclude 闭包会连同捕获变量一起被序列化进 Jar 任务的 mainSpec。
+        // 直接捕获 KGP 的 compilation bean,引用链会拖入 KotlinJvmTarget_Decorated
+        // (binariesDsl$delegate 是 SynchronizedLazyImpl)、DefaultSourceSet、JavaCompile,
+        // 导致配置缓存序列化失败。先包装成 Gradle 自有的 ConfigurableFileCollection,
+        // 配置缓存对它按文件路径列表存储,闭包只捕获这个包装集合。
+        // 注意:不能用 project.files { } 工厂闭包形式——callable 本身会重新捕获 compilation。
+        val originalClassDirs = project.files(compilation.output.classesDirs)
         project.tasks.named(target.artifactsTaskName, Jar::class.java).configure { jarTask ->
             jarTask.dependsOn(nativeTask)
             jarTask.isPreserveFileTimestamps = false
             jarTask.isReproducibleFileOrder = true
             jarTask.exclude { element ->
                 val source = element.file.toPath().toAbsolutePath().normalize()
-                compilation.output.classesDirs.files.any { classDirectory ->
+                originalClassDirs.files.any { classDirectory ->
                     val root = classDirectory.toPath().toAbsolutePath().normalize()
                     Files.isDirectory(root) && source.startsWith(root)
                 }
