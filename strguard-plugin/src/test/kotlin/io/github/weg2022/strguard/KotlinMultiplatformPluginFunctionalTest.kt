@@ -36,7 +36,7 @@ class KotlinMultiplatformPluginFunctionalTest {
             "build.gradle.kts",
             """
             plugins {
-                kotlin("multiplatform") version "2.1.21"
+                kotlin("multiplatform") version "2.4.10"
                 id("io.github.weg2022.strguard")
             }
 
@@ -163,11 +163,18 @@ class KotlinMultiplatformPluginFunctionalTest {
         )
         writeFile("local.properties", "sdk.dir=${availableSdk.toString().replace("\\", "\\\\")}")
         writeFile(
+            "gradle.properties",
+            // AGP 9 内置 Kotlin 与 KMP 不兼容（需 com.android.kotlin.multiplatform.library，
+            // 且该插件不支持 NDK——StrGuard 的 KMP android 原生集成依赖旧 DSL），
+            // 走官方提供的向后兼容路径
+            "android.builtInKotlin=false\nandroid.newDsl=false\n",
+        )
+        writeFile(
             "build.gradle.kts",
             """
             plugins {
-                kotlin("multiplatform") version "2.1.21"
-                id("com.android.library") version "8.13.2"
+                kotlin("multiplatform") version "2.4.10"
+                id("com.android.library") version "9.3.1"
                 id("io.github.weg2022.strguard")
             }
 

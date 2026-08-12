@@ -1,0 +1,15 @@
+# Android 15+ 强制 16 KB page size：所有 Android 目标的链接段对齐必须为
+# 16384（默认 4096），否则 Play 商店审核拒绝、16 KB 设备上加载失败。
+# 插件构建时也会通过 CARGO_ENCODED_RUSTFLAGS 注入同等参数，此处覆盖
+# 直接执行 cargo build 的场景。
+[target.aarch64-linux-android]
+rustflags = ["-C", "link-arg=-Wl,-z,max-page-size=16384"]
+
+[target.armv7-linux-androideabi]
+rustflags = ["-C", "link-arg=-Wl,-z,max-page-size=16384"]
+
+[target.i686-linux-android]
+rustflags = ["-C", "link-arg=-Wl,-z,max-page-size=16384"]
+
+[target.x86_64-linux-android]
+rustflags = ["-C", "link-arg=-Wl,-z,max-page-size=16384"]

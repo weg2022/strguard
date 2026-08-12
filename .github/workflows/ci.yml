@@ -155,36 +155,6 @@ jobs:
           bash ./gradlew -p samples/kotlin-jvm run --stacktrace
           bash ./gradlew -p samples/kotlin-multiplatform jvmJar --stacktrace
 
-  java11-runtime:
-    name: Java 11 protected runtime
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          persist-credentials: false
-      - uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
-        with:
-          distribution: temurin
-          java-version: 11
-      - name: Save Java 11 runtime path
-        shell: bash
-        run: echo "STRGUARD_JAVA11_HOME=${JAVA_HOME}" >> "${GITHUB_ENV}"
-      - uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
-        with:
-          distribution: temurin
-          java-version: 21
-      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-          targets: x86_64-unknown-linux-gnu
-      - uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6
-      - name: Build with JDK 21 and execute with JDK 11
-        run: >-
-          bash ./gradlew :strguard-plugin:test
-          --tests "io.github.weg2022.strguard.Java11RuntimeFunctionalTest"
-          --stacktrace
-
   android-native:
     name: Android 4 ABI packaging and R8
     runs-on: ubuntu-24.04
@@ -225,6 +195,26 @@ jobs:
           bash ./gradlew -p samples/android-library assembleDebug --stacktrace
           bash ./gradlew -p samples/kotlin-android-application \
             assembleDebug assembleRelease assembleReleaseAndroidTest bundleRelease --stacktrace
+      - name: Verify protection invariants (16 KB alignment, plaintext-free strings, stripped symbols)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ndk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}/ndk/${ANDROID_NDK_VERSION}"
+          readelf="${ndk_root}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          apk="$(find samples/android-application/build/outputs/apk/debug -maxdepth 1 -name '*.apk' | head -n 1)"
+          test -n "${apk}"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "${tmp}"' EXIT
+          # Native 库按构建专属随机名打包（libsg_<hash>.so）
+          unzip -p "${apk}" "lib/arm64-v8a/*.so" > "${tmp}/native.so"
+          # Android 15+ 强制 16 KB page size：每个 LOAD 段对齐必须为 0x4000
+          "${readelf}" -l "${tmp}/native.so" | awk '/LOAD/ && $NF != "0x4000" { print "LOAD alignment " $NF " is not 16 KB"; exit 1 }'
+          # 编译期 XOR 混淆：协议 label、错误消息、JNI 签名不得以明文出现
+          ! strings "${tmp}/native.so" | grep -q "Invalid StrGuard vault"
+          ! strings "${tmp}/native.so" | grep -q "strguard/v3/record-key"
+          ! strings "${tmp}/native.so" | grep -q "(JJ)Ljava/lang/String;"
+          # 调试符号已剥离
+          ! "${readelf}" -S "${tmp}/native.so" | grep -qE '\.symtab|\.debug_'
 
   reproducibility:
     name: Reproducible protected artifacts

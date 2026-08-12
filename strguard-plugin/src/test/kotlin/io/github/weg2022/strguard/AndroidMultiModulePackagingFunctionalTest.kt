@@ -169,7 +169,7 @@ class AndroidMultiModulePackagingFunctionalTest {
     ): String =
         """
         plugins {
-            id("$pluginId") version "8.13.2"
+            id("$pluginId") version "9.3.1"
             id("io.github.weg2022.strguard")
         }
 

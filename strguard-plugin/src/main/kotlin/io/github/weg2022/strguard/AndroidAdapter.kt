@@ -63,7 +63,7 @@ internal object AndroidAdapter {
         val proguardRules = androidProguardRules(supportClasses)
         addSupportCompileDependency(project, supportClasses)
         androidComponents.finalizeDsl { android ->
-            android.defaultConfig.consumerProguardFile(proguardRules)
+            android.defaultConfig.consumerProguardFile(proguardRules.get().asFile)
             if (extension.enabled.get()) {
                 ndkVersion.set(android.ndkVersion)
                 val configuredAbis = configuredAndroidAbis(extension)
@@ -152,7 +152,9 @@ internal object AndroidAdapter {
                 TransformAndroidClassesTask::inputDirectories,
                 TransformAndroidClassesTask::outputJar,
             )
-        variant.proguardFiles.add(proguardRules)
+        // AGP 9 的 variant.proguardFiles 仅接受静态 RegularFile（Provider 形式被
+        // disallowProvider 默认拒绝）；在 variant 配置期解析任务输出，规则文件立即可用
+        variant.proguardFiles.add(proguardRules.get())
 
         val hostTag =
             project.strGuardProvider(

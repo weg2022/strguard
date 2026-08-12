@@ -259,7 +259,7 @@ class DesktopShrinkerFunctionalTest {
             "build.gradle.kts",
             """
             plugins {
-                kotlin("multiplatform") version "2.1.21"
+                kotlin("multiplatform") version "2.4.10"
                 id("io.github.weg2022.strguard")
             }
 
@@ -584,9 +584,9 @@ class DesktopShrinkerFunctionalTest {
             "build.gradle.kts",
             """
             plugins {
-                kotlin("multiplatform") version "2.1.21"
-                id("org.jetbrains.kotlin.plugin.compose") version "2.1.21"
-                id("org.jetbrains.compose") version "1.8.2"
+                kotlin("multiplatform") version "2.4.10"
+                id("org.jetbrains.kotlin.plugin.compose") version "2.4.10"
+                id("org.jetbrains.compose") version "1.11.1"
                 id("io.github.weg2022.strguard")
             }
 

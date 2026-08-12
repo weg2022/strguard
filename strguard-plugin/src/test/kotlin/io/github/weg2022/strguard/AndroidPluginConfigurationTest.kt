@@ -45,7 +45,7 @@ class AndroidPluginConfigurationTest {
             "build.gradle.kts",
             """
             plugins {
-                id("$androidPluginId") version "8.13.2"
+                id("$androidPluginId") version "9.3.1"
                 id("io.github.weg2022.strguard")
             }
 
@@ -263,7 +263,7 @@ class AndroidPluginConfigurationTest {
             import io.github.weg2022.strguard.TransformAndroidClassesTask
 
             plugins {
-                id("com.android.application") version "8.13.2"
+                id("com.android.application") version "9.3.1"
                 id("io.github.weg2022.strguard")
             }
 

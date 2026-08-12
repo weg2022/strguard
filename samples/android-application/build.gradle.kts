@@ -1,5 +1,5 @@
 plugins {
-    id("com.android.application") version "8.13.2"
+    id("com.android.application") version "9.3.1"
     id("io.github.weg2022.strguard")
 }
 

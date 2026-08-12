@@ -29,7 +29,7 @@ internal object ClassTransformer {
                 processMetadata = settings.shouldRemoveMetadata(className) && !exclusions.keepMetadata,
                 vaultBuilder = vaultBuilder,
                 stringCoverage = stringCoverage,
-                delegate = MaxsComputingClassWriter(),
+                delegate = FramesComputingClassWriter(),
             )
         classReader.accept(visitor, ClassReader.EXPAND_FRAMES)
         return ClassTransformResult(
@@ -65,7 +65,12 @@ private data class ClassExclusions(
     }
 }
 
-private class MaxsComputingClassWriter : ClassWriter(COMPUTE_MAXS)
+/**
+ * 转换会改写指令流（concat 重写引入新局部变量、LDC 替换为 gateway 调用），
+ * 而 LocalVariablesSorter 修改后的帧在新布局下可能非法（分支目标帧声明了
+ * 其他路径未初始化的变量类型导致 VerifyError），因此必须重算栈映射帧。
+ */
+private class FramesComputingClassWriter : ClassWriter(COMPUTE_FRAMES)
 
 private class StringObfuscationClassVisitor(
     private val settings: TransformSettings,
@@ -142,6 +147,9 @@ private class StringObfuscationClassVisitor(
             } else {
                 stringCoverage.recordSkipped(value, StringSkipReason.UNSUPPORTED_FIELD_STRING)
             }
+        } else if (processStrings && descriptor == STRING_DESCRIPTOR && name != null && value is ConstantDynamic) {
+            // 与 LDC 中的 condy 保持一致：String 描述符的 condy 字段值不转换但如实计数
+            recordConstantDynamic(value)
         }
         val delegate = super.visitField(access, name, descriptor, signature, outputValue)
         return if (processStrings && delegate != null) TrackingFieldVisitor(delegate) else delegate
@@ -377,6 +385,23 @@ private class StringObfuscationClassVisitor(
 
         private fun appendDynamicArgument(stringBuilderLocal: Int, type: Type, local: Int) {
             super.visitVarInsn(Opcodes.ALOAD, stringBuilderLocal)
+            if (type.descriptor == CHAR_ARRAY_DESCRIPTOR) {
+                // StringConcatFactory 对 char[] 是复制语义（new String(char[]) 复制数组）；
+                // 直接 StringBuilder.append(char[]) 只持有引用，数组后续被修改会改变结果。
+                super.visitTypeInsn(Opcodes.NEW, "java/lang/String")
+                super.visitInsn(Opcodes.DUP)
+                super.visitVarInsn(Opcodes.ALOAD, local)
+                super.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/String", "<init>", "([C)V", false)
+                super.visitMethodInsn(
+                    Opcodes.INVOKEVIRTUAL,
+                    STRING_BUILDER,
+                    "append",
+                    "(Ljava/lang/String;)Ljava/lang/StringBuilder;",
+                    false,
+                )
+                super.visitInsn(Opcodes.POP)
+                return
+            }
             super.visitVarInsn(type.getOpcode(Opcodes.ILOAD), local)
             super.visitMethodInsn(
                 Opcodes.INVOKEVIRTUAL,
@@ -519,6 +544,9 @@ private class StringObfuscationClassVisitor(
                     }
                     return
                 }
+                // makeConcat 变体没有 recipe 与静态参数：记录一次"跳过了整个拼接"
+                stringCoverage.recordSkipped(reason)
+                return
             }
             bootstrapMethodArguments.forEach { argument -> recordBootstrapString(argument, reason) }
         }
@@ -537,24 +565,24 @@ private class StringObfuscationClassVisitor(
             }
             if (literal.isNotEmpty()) stringCoverage.recordSkipped(literal.toString(), reason)
         }
+    }
 
-        private fun recordBootstrapString(value: Any?, reason: StringSkipReason) {
-            when (value) {
-                is String -> stringCoverage.recordSkipped(value, reason)
-                is ConstantDynamic -> recordConstantDynamic(value)
-            }
+    private fun recordBootstrapString(value: Any?, reason: StringSkipReason) {
+        when (value) {
+            is String -> stringCoverage.recordSkipped(value, reason)
+            is ConstantDynamic -> recordConstantDynamic(value)
         }
+    }
 
-        private fun recordConstantDynamic(value: ConstantDynamic) {
-            if (value.descriptor == STRING_DESCRIPTOR) {
-                stringCoverage.recordSkipped(StringSkipReason.CONSTANT_DYNAMIC)
-            }
-            for (index in 0 until value.bootstrapMethodArgumentCount) {
-                recordBootstrapString(
-                    value.getBootstrapMethodArgument(index),
-                    StringSkipReason.CONSTANT_DYNAMIC,
-                )
-            }
+    private fun recordConstantDynamic(value: ConstantDynamic) {
+        if (value.descriptor == STRING_DESCRIPTOR) {
+            stringCoverage.recordSkipped(StringSkipReason.CONSTANT_DYNAMIC)
+        }
+        for (index in 0 until value.bootstrapMethodArgumentCount) {
+            recordBootstrapString(
+                value.getBootstrapMethodArgument(index),
+                StringSkipReason.CONSTANT_DYNAMIC,
+            )
         }
     }
 
@@ -607,6 +635,7 @@ private class StringObfuscationClassVisitor(
 private data class StaticStringField(val name: String, val reference: VaultReference)
 
 private const val STRING_DESCRIPTOR = "Ljava/lang/String;"
+private const val CHAR_ARRAY_DESCRIPTOR = "[C"
 private const val KEEP_STRING_ANNOTATION = "Lio/github/weg2022/strguard/annotation/KeepString;"
 private const val KEEP_METADATA_ANNOTATION = "Lio/github/weg2022/strguard/annotation/KeepMetadata;"
 private const val STRING_CONCAT_FACTORY = "java/lang/invoke/StringConcatFactory"
@@ -624,4 +653,4 @@ private val KOTLIN_METADATA_ANNOTATIONS =
 private fun isStringConcatFactory(bootstrapMethodHandle: Handle?): Boolean = bootstrapMethodHandle != null &&
     bootstrapMethodHandle.tag == Opcodes.H_INVOKESTATIC &&
     bootstrapMethodHandle.owner == STRING_CONCAT_FACTORY &&
-    bootstrapMethodHandle.name == "makeConcatWithConstants"
+    (bootstrapMethodHandle.name == "makeConcatWithConstants" || bootstrapMethodHandle.name == "makeConcat")

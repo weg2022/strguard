@@ -129,6 +129,11 @@ internal fun encodedReproducibleRustFlags(buildRoot: java.nio.file.Path, targetT
     if (targetTriple.endsWith("-pc-windows-msvc")) {
         flags += "-Clink-arg=/Brepro"
     }
+    if (targetTriple.endsWith("-linux-android")) {
+        // Android 15+ 强制 16 KB page size：LD 段对齐必须是 16384 而非默认 4096，
+        // 否则 Play 商店审核与 16 KB 设备加载失败
+        flags += "-Clink-arg=-Wl,-z,max-page-size=16384"
+    }
     return flags.joinToString(RUSTFLAGS_SEPARATOR)
 }
 

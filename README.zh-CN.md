@@ -16,20 +16,34 @@ StrGuard 提供的是提高静态提取成本的 authenticated obfuscation，不
 * ProGuard/R8 verified artifact与 Compose Desktop release ProGuard集成
 * `LDC`、static final 字符串、Java 9+ `StringConcatFactory`、Kotlin 字符串模板，以及数组、集合、switch/when、lambda、reflection call 等普通 bytecode 中的同类字面量
 * 可选 Kotlin metadata annotation移除
+* Native 运行时对齐 Android 15+ 的 16 KB ELF page size
+* Native 侧编译期字符串混淆：协议 label、错误消息与 JNI 签名在编译期 XOR 加密、运行时才解码，`strings`/`.rodata` 扫描找不到明文
+* Native 运行时已剥离调试符号（无 `.symtab`/`.debug_*`）
 
 支持的 plugin ID为 `java`、`java-library`、`application`、`org.jetbrains.kotlin.jvm`、`org.jetbrains.kotlin.android`、`com.android.application`、`com.android.library`、`org.jetbrains.kotlin.multiplatform`。Kotlin Android必须搭配 Android Application或 Library插件。
 
 ## 环境要求
 
-* 使用 JDK 17 或 21 运行 Gradle；受保护输出最低为 Java 11 或原始 bytecode 版本
+* 使用 JDK 17 或 21 运行 Gradle；受保护输出最低为 Java 17 或原始 bytecode 版本
 * ASM 9.10.1 支持并原样保留 Java 11 到 Java 27 的 class（major 55-71），包括 Java 27 preview class；范围外输入不受支持
 * 发布插件会把 ASM shade 并 relocate 到私有 namespace，因此 Gradle、`buildSrc` 或其他插件预加载的旧 ASM 无法降低 class-file 支持上限
-* Gradle 8.14.4
+* Gradle 9.5.0
 * Rust/Cargo 1.94.1，以及目标平台与 linker
-* Kotlin Gradle Plugin 2.1.21
-* Android Gradle Plugin 8.13.2、Android SDK 34、NDK 27.2.12479018
+* Kotlin Gradle Plugin 2.4.10
+* Android Gradle Plugin 9.3.1、Android SDK 34、NDK 27.2.12479018
 
 `STRGUARD_CARGO_EXECUTABLE` 可指定 Cargo。其同目录 `rustc` 与选定的 linker/archiver 会进入 toolchain fingerprint。
+
+## AGP 9 兼容
+
+Android Gradle Plugin 9 内置 Kotlin 支持。使用 `org.jetbrains.kotlin.android` 插件的 Kotlin Android 模块必须在 `gradle.properties` 中显式关闭，以保证插件与 StrGuard 使用一致的 Kotlin 构建管线：
+
+```properties
+android.builtInKotlin=false
+android.newDsl=false
+```
+
+当前设置见 `samples/kotlin-android-application/gradle.properties`。
 
 ## 安装
 
@@ -37,7 +51,7 @@ StrGuard 提供的是提高静态提取成本的 authenticated obfuscation，不
 
 ```kotlin
 plugins {
-    id("io.github.weg2022.strguard") version "2.0.1"
+    id("io.github.weg2022.strguard") version "2.0.2"
 }
 ```
 
@@ -163,7 +177,7 @@ val shrink = tasks.register<proguard.gradle.ProGuardTask>("proguardMain") {
 }
 val verifiedJar = artifact.verifyShrunkJar(
     shrink.map { layout.buildDirectory.file("shrinker/raw.jar").get() },
-    "proguard:7.9.1",
+    "proguard:7.7.0",
 )
 ```
 
@@ -223,7 +237,7 @@ cargo test --manifest-path native/strguard-runtime/Cargo.toml --locked
 
 ## CI
 
-`ci.yml` 覆盖 JDK 17/21、Java 11、6 个 Desktop runner、Android 4 ABI/R8、Rust audit/deny/coverage/performance/RSS、可复现性、dependency verification、distribution 与 samples。
+`ci.yml` 覆盖 JDK 17/21、6 个 Desktop runner、带保护不变量检查（16 KB ELF 对齐与明文字符串检测）的 Android 4 ABI/R8、Rust audit/deny/coverage/performance/RSS、可复现性、dependency verification、distribution 与 samples。
 
 ## License
 

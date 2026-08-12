@@ -10,7 +10,7 @@ import java.nio.ByteOrder
 import java.nio.file.Files
 import java.nio.file.Path
 
-internal class SecureVaultBuilder(
+internal open class SecureVaultBuilder(
     releaseSeedHex: String,
     moduleIdentity: String,
     inputDigest: ByteArray,
@@ -67,7 +67,7 @@ internal class SecureVaultBuilder(
             return records.size
         }
 
-    fun protect(rawValue: String, callSiteIdentity: String): VaultProtectionResult {
+    open fun protect(rawValue: String, callSiteIdentity: String): VaultProtectionResult {
         checkOpen()
         if (rawValue.isEmpty()) return VaultProtectionResult.Empty
         if (rawValue.length > MAX_PLAINTEXT_CODE_UNITS) return VaultProtectionResult.TooLarge

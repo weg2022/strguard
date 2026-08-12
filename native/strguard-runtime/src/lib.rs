@@ -8,7 +8,7 @@ use sha2::Sha256;
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 use std::ptr;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use zeroize::{Zeroize, Zeroizing};
 
 include!(concat!(env!("OUT_DIR"), "/native_config.rs"));
@@ -21,8 +21,39 @@ const VERSION: u8 = 3;
 const CAPABILITY_SIZE: usize = 16;
 const NONCE_SIZE: usize = 12;
 const TAG_SIZE: usize = 16;
-const GATEWAY_SIGNATURE: &str = "(JJ)Ljava/lang/String;";
-const RECORD_KEY_LABEL: &[u8] = b"strguard/v3/record-key";
+// --- 字符串混淆：编译期 XOR 加密，明文从不进入二进制 ---
+// reveal 在运行时解码；防 strings 扫描与机制指纹，属反侦查层
+const fn obfuscate<const N: usize>(input: &[u8], key: u8) -> [u8; N] {
+    assert!(input.len() == N, "obfuscate length mismatch");
+    let mut out = [0_u8; N];
+    let mut i = 0;
+    while i < N {
+        out[i] = input[i] ^ key;
+        i += 1;
+    }
+    out
+}
+
+fn reveal<const N: usize>(bytes: &[u8; N], key: u8) -> Zeroizing<String> {
+    let mut decoded = Vec::with_capacity(N);
+    for &byte in bytes {
+        decoded.push(byte ^ key);
+    }
+    Zeroizing::new(String::from_utf8(decoded).expect("obfuscated string must be valid UTF-8"))
+}
+
+// HKDF info label 每次 record key 派生使用，解密结果缓存一次
+fn record_key_label() -> &'static [u8] {
+    static LABEL: OnceLock<Zeroizing<String>> = OnceLock::new();
+    LABEL
+        .get_or_init(|| reveal(&RECORD_KEY_LABEL_ENC, RECORD_KEY_LABEL_KEY))
+        .as_bytes()
+}
+
+const GATEWAY_SIGNATURE_KEY: u8 = 0x5a;
+const GATEWAY_SIGNATURE_ENC: [u8; 22] = obfuscate(b"(JJ)Ljava/lang/String;", GATEWAY_SIGNATURE_KEY);
+const RECORD_KEY_LABEL_KEY: u8 = 0x6b;
+const RECORD_KEY_LABEL_ENC: [u8; 22] = obfuscate(b"strguard/v3/record-key", RECORD_KEY_LABEL_KEY);
 
 #[derive(Debug)]
 enum VaultError {
@@ -34,13 +65,20 @@ enum VaultError {
 }
 
 impl VaultError {
-    fn message(&self) -> &'static str {
+    fn message(&self) -> Zeroizing<String> {
+        const INVALID_FORMAT: [u8; 22] = obfuscate(b"Invalid StrGuard vault", 0x3d);
+        const RECORD_NOT_FOUND: [u8; 27] = obfuscate(b"Unknown StrGuard capability", 0x4e);
+        const AUTH_FAILED: [u8; 36] = obfuscate(b"StrGuard vault authentication failed", 0x7a);
+        const RUNTIME_UNAVAILABLE: [u8; 38] =
+            obfuscate(b"StrGuard Native runtime is unavailable", 0x2c);
+        const JVM_FAILURE: [u8; 51] =
+            obfuscate(b"StrGuard could not create the protected Java string", 0x15);
         match self {
-            Self::InvalidFormat => "Invalid StrGuard vault",
-            Self::RecordNotFound => "Unknown StrGuard capability",
-            Self::AuthenticationFailed => "StrGuard vault authentication failed",
-            Self::RuntimeUnavailable => "StrGuard Native runtime is unavailable",
-            Self::JvmFailure => "StrGuard could not create the protected Java string",
+            Self::InvalidFormat => reveal(&INVALID_FORMAT, 0x3d),
+            Self::RecordNotFound => reveal(&RECORD_NOT_FOUND, 0x4e),
+            Self::AuthenticationFailed => reveal(&AUTH_FAILED, 0x7a),
+            Self::RuntimeUnavailable => reveal(&RUNTIME_UNAVAILABLE, 0x2c),
+            Self::JvmFailure => reveal(&JVM_FAILURE, 0x15),
         }
     }
 }
@@ -178,7 +216,9 @@ pub extern "system" fn JNI_OnLoad(vm: JavaVM, _reserved: *mut c_void) -> jint {
         .zip(function_pointers)
         .map(|(name, function)| NativeMethod {
             name: (*name).into(),
-            sig: GATEWAY_SIGNATURE.into(),
+            sig: reveal(&GATEWAY_SIGNATURE_ENC, GATEWAY_SIGNATURE_KEY)
+                .to_string()
+                .into(),
             fn_ptr: function,
         })
         .collect();
@@ -305,7 +345,7 @@ fn create_interned_string(env: &mut JNIEnv, code_units: &[u16]) -> Result<Global
 
 fn throw_and_return_null(env: &mut JNIEnv, error: VaultError) -> jstring {
     if !env.exception_check().unwrap_or(true) {
-        let _ = env.throw_new("java/lang/IllegalStateException", error.message());
+        let _ = env.throw_new("java/lang/IllegalStateException", error.message().as_str());
     }
     ptr::null_mut()
 }
@@ -370,9 +410,9 @@ fn derive_record_key(
 ) -> Result<[u8; 32], VaultError> {
     let hkdf = Hkdf::<Sha256>::new(Some(&BUILD_ID), master_key);
     let mut info = Zeroizing::new(Vec::with_capacity(
-        RECORD_KEY_LABEL.len() + CAPABILITY_SIZE + 1,
+        record_key_label().len() + CAPABILITY_SIZE + 1,
     ));
-    info.extend_from_slice(RECORD_KEY_LABEL);
+    info.extend_from_slice(record_key_label());
     info.extend_from_slice(capability);
     info.push(gateway);
     let mut output = [0_u8; 32];
@@ -425,6 +465,43 @@ mod tests {
     use super::*;
     use std::hint::black_box;
     use std::time::Instant;
+
+    #[test]
+    fn obfuscated_strings_round_trip() {
+        for (encrypted, key, plaintext) in [
+            (
+                &RECORD_KEY_LABEL_ENC,
+                RECORD_KEY_LABEL_KEY,
+                "strguard/v3/record-key",
+            ),
+            (
+                &GATEWAY_SIGNATURE_ENC,
+                GATEWAY_SIGNATURE_KEY,
+                "(JJ)Ljava/lang/String;",
+            ),
+        ] {
+            assert_eq!(reveal(encrypted, key).as_str(), plaintext);
+            // 加密字节不含明文子串（防回归：误用 const 求值直接量/统一 key）
+            let prefix = plaintext.as_bytes()[..8.min(plaintext.len())].to_vec();
+            for window in encrypted.windows(prefix.len()) {
+                assert_ne!(window, &prefix[..], "plaintext leak in obfuscated bytes");
+            }
+        }
+        assert_eq!(record_key_label(), b"strguard/v3/record-key");
+        for error in [
+            VaultError::InvalidFormat,
+            VaultError::RecordNotFound,
+            VaultError::AuthenticationFailed,
+            VaultError::RuntimeUnavailable,
+            VaultError::JvmFailure,
+        ] {
+            assert!(!error.message().is_empty(), "decoded error message must not be empty");
+        }
+        assert_eq!(
+            VaultError::InvalidFormat.message().as_str(),
+            "Invalid StrGuard vault"
+        );
+    }
 
     #[test]
     fn accepts_an_empty_v3_vault() {
