@@ -50,6 +50,9 @@ class KotlinAndroidPluginFunctionalTest {
         writeFile(
             "gradle.properties",
             buildString {
+                // TestKit daemon 默认仅 -Xmx512m/-XX:MaxMetaspaceSize=384m，
+                // AGP 9 构建在 CI 实测撑爆 Metaspace（OutOfMemoryError）
+                appendLine("org.gradle.jvmargs=-Xmx2g -XX:MaxMetaspaceSize=1g")
                 // AGP 9 内置 Kotlin：kotlin.android 插件在 AGP 9 下被禁用；StrGuard 的
                 // KMP/NDK 集成仍依赖旧 DSL，走官方提供的向后兼容路径
                 appendLine("android.builtInKotlin=false")

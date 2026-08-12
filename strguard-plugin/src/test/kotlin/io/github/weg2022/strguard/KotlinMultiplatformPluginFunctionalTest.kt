@@ -166,8 +166,9 @@ class KotlinMultiplatformPluginFunctionalTest {
             "gradle.properties",
             // AGP 9 内置 Kotlin 与 KMP 不兼容（需 com.android.kotlin.multiplatform.library，
             // 且该插件不支持 NDK——StrGuard 的 KMP android 原生集成依赖旧 DSL），
-            // 走官方提供的向后兼容路径
-            "android.builtInKotlin=false\nandroid.newDsl=false\n",
+            // 走官方提供的向后兼容路径。jvmargs：TestKit daemon 默认 512m/384m，
+            // AGP 9 构建在 CI 实测撑爆 Metaspace
+            "org.gradle.jvmargs=-Xmx2g -XX:MaxMetaspaceSize=1g\nandroid.builtInKotlin=false\nandroid.newDsl=false\n",
         )
         writeFile(
             "build.gradle.kts",
