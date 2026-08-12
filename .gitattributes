@@ -1,0 +1,12 @@
+# 统一 LF 行尾：避免 Windows 提交产生 CRLF blob，导致 Linux CI 上
+# spotless/rustfmt 等格式门禁误报违规（曾因 RuntimeLdcTest.kt 复现）
+*.kt text eol=lf
+*.kts text eol=lf
+*.java text eol=lf
+*.rs text eol=lf
+*.toml text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+*.properties text eol=lf
+*.xml text eol=lf
