@@ -109,6 +109,8 @@ class StrGuardPlugin : Plugin<Project> {
                 task.group = STRGUARD_TASK_GROUP
                 task.description = "Transforms main JVM classes with StrGuard."
                 task.inputClassDirectories.from(originalClassDirectories)
+                // 帧合并解析类型需要依赖 jar 中的类(如 Compose 的 PopupPositionProvider)
+                task.resolutionClasspath.from(mainSourceSet.map { it.compileClasspath })
                 task.outputDirectory.convention(project.layout.buildDirectory.dir("strguard/classes/main"))
                 task.nativeInputDirectory.convention(project.layout.buildDirectory.dir("strguard/native-input/main"))
                 task.reportDirectory.convention(project.layout.buildDirectory.dir("reports/strguard/main"))

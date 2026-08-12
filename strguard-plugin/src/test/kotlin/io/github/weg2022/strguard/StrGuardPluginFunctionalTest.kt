@@ -512,6 +512,10 @@ class StrGuardPluginFunctionalTest {
                 mavenCentral()
             }
 
+            dependencies {
+                implementation("org.jetbrains.kotlin:kotlin-stdlib:2.4.10")
+            }
+
             strGuard {
                 releaseSeedHex.set("$TEST_RELEASE_SEED")
                 stringGuardPackages.set(listOf("sample"))
@@ -530,6 +534,12 @@ class StrGuardPluginFunctionalTest {
                 // if/else 两个分支汇合处产生不同类型(TaskA/TaskB)的帧合并,
                 // COMPUTE_FRAMES 需要加载这两个项目类求公共父类,必须能从编译输出解析。
                 fun merge(flag: Boolean, a: TaskA?, b: TaskB?): Any? = if (flag) a else b
+
+                // 合并依赖 jar 中的类(kotlin.text.StringBuilder 来自 kotlin-stdlib,
+                // 不在项目编译输出):验证 resolutionClasspath 注入依赖类路径后
+                // getCommonSuperClass 能解析依赖类型,而非退化 Object 或直接失败。
+                fun mergeLibraryTypes(flag: Boolean): CharSequence =
+                    if (flag) kotlin.text.StringBuilder("k") else java.lang.StringBuilder("j")
 
                 fun label(): String = "frame-merge-sensitive-label"
             }

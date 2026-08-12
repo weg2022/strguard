@@ -22,6 +22,16 @@ abstract class TransformClassesTask : DefaultTask() {
     @get:PathSensitive(PathSensitivity.RELATIVE)
     abstract val inputClassDirectories: ConfigurableFileCollection
 
+    /**
+     * 帧合并解析类型的依赖类路径(compileClasspath/compileDependencyFiles)。
+     * 项目类可能引用依赖 jar 中的类(如 Compose 的 PopupPositionProvider),
+     * COMPUTE_FRAMES 求公共父类时需要能加载它们;帧合并结果写入字节码,
+     * 因此按 @Classpath 追踪以保证依赖类型层级变化时任务重跑。
+     */
+    @get:Classpath
+    @get:Optional
+    abstract val resolutionClasspath: ConfigurableFileCollection
+
     @get:OutputDirectory
     abstract val outputDirectory: DirectoryProperty
 
@@ -85,12 +95,12 @@ abstract class TransformClassesTask : DefaultTask() {
             )
         val sources = collectInputFiles()
         // COMPUTE_FRAMES 合并帧时需要加载项目类型(见 FramesComputingClassWriter)：
-        // 从输入 class 目录构建 URLClassLoader,parent 为 StrGuard 自身类加载器,
-        // 因此 JDK/依赖类走 parent,项目类走输入目录。
+        // 从输入 class 目录与依赖类路径构建 URLClassLoader,parent 为 StrGuard
+        // 自身类加载器,因此 JDK 类走 parent,项目类与依赖 jar 类走输入。
         val projectClassLoader =
             URLClassLoader(
-                inputClassDirectories.files
-                    .map { directory -> directory.toURI().toURL() }
+                (inputClassDirectories.files + resolutionClasspath.files)
+                    .map { file -> file.toURI().toURL() }
                     .toTypedArray(),
                 this::class.java.classLoader,
             )

@@ -71,6 +71,8 @@ internal object KotlinMultiplatformAdapter {
             task.group = STRGUARD_TASK_GROUP
             task.description = "Transforms the ${target.name} Kotlin Multiplatform JVM classes with StrGuard."
             task.inputClassDirectories.from(compilation.output.classesDirs)
+            // 帧合并解析类型需要依赖 jar 中的类(如 Compose 的 PopupPositionProvider)
+            task.resolutionClasspath.from(compilation.compileDependencyFiles)
             task.outputDirectory.convention(
                 project.layout.buildDirectory.dir("strguard/classes/${target.name}/main"),
             )

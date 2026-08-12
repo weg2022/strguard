@@ -96,7 +96,11 @@ private class FramesComputingClassWriter(
 
     private fun loadClass(type: String): Class<*>? = try {
         Class.forName(type.replace('/', '.'), false, classesClassLoader)
-    } catch (exception: ClassNotFoundException) {
+    } catch (failure: Throwable) {
+        // 捕获全部 Throwable 而非仅 ClassNotFoundException:依赖 jar 不完整时
+        // Class.forName 会抛 NoClassDefFoundError/LinkageError(Error 不是
+        // Exception),若不放宽捕获会直接穿透导致任务失败。加载失败退化为
+        // java/lang/Object:栈帧类型变宽合法,仅丢失精度。
         null
     }
 }
