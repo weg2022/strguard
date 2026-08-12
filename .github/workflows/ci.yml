@@ -5,8 +5,6 @@ on:
     branches: [master, main]
   pull_request:
   workflow_dispatch:
-  schedule:
-    - cron: "17 3 * * *"
 
 permissions:
   contents: read
