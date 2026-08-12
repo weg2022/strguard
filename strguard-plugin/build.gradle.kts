@@ -3,7 +3,7 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
 plugins {
-    kotlin("jvm") version "2.1.21"
+    kotlin("jvm") version "2.4.10"
     `java-gradle-plugin`
     `maven-publish`
     jacoco
@@ -19,9 +19,9 @@ jacoco {
 group = "io.github.weg2022"
 version = providers.gradleProperty("strguardVersion").getOrElse("2.0.1")
 
-val androidGradlePluginVersion = "8.13.2"
-val kotlinGradlePluginVersion = "2.1.21"
-val composeGradlePluginVersion = "1.8.2"
+val androidGradlePluginVersion = "9.3.1"
+val kotlinGradlePluginVersion = "2.4.10"
+val composeGradlePluginVersion = "1.11.1"
 val asmVersion = "9.10.1"
 
 val relocatedAsm by configurations.creating
@@ -55,8 +55,8 @@ spotless {
 }
 
 java {
-    sourceCompatibility = JavaVersion.VERSION_11
-    targetCompatibility = JavaVersion.VERSION_11
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
     withSourcesJar()
 }
 
@@ -105,17 +105,17 @@ tasks.pluginUnderTestMetadata {
 }
 
 tasks.withType<KotlinCompile>().configureEach {
-    compilerOptions.jvmTarget.set(JvmTarget.JVM_11)
+    compilerOptions.jvmTarget.set(JvmTarget.JVM_17)
     compilerOptions.freeCompilerArgs.addAll(
         "-Xno-param-assertions",
         "-Xno-call-assertions",
         "-Xno-receiver-assertions",
-        "-Xjdk-release=11",
+        "-Xjdk-release=17",
     )
 }
 
 tasks.withType<JavaCompile>().configureEach {
-    options.release.set(11)
+    options.release.set(17)
 }
 
 tasks.withType<Test>().configureEach {
@@ -136,6 +136,8 @@ tasks.withType<Test>().configureEach {
 
 tasks.jacocoTestReport {
     dependsOn(tasks.test)
+    // 聚合 jacoco 目录下所有 exec（本地分批验证时保留各批次数据）
+    executionData.setFrom(fileTree(project.layout.buildDirectory.dir("jacoco")) { include("*.exec") })
     reports {
         xml.required.set(true)
         html.required.set(true)
@@ -145,6 +147,8 @@ tasks.jacocoTestReport {
 
 tasks.jacocoTestCoverageVerification {
     dependsOn(tasks.test)
+    // 与 jacocoTestReport 保持一致的聚合语义
+    executionData.setFrom(fileTree(project.layout.buildDirectory.dir("jacoco")) { include("*.exec") })
     violationRules {
         rule {
             limit {

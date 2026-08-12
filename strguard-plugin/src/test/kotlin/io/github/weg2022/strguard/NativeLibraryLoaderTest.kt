@@ -32,13 +32,14 @@ class NativeLibraryLoaderTest {
     }
 
     @Test
-    fun `injected loader targets Java 11 and has no Kotlin runtime references`() {
+    fun `injected loader targets Java 17 and has no Kotlin runtime references`() {
         val bytes =
             assertNotNull(
                 NativeLibraryLoader::class.java.getResourceAsStream("NativeLibraryLoader.class"),
             ).use { input -> input.readBytes() }
 
-        assertEquals(55, readUnsignedShort(bytes, 6))
+        // class 文件偏移 6-7 是 major version：Java 17 = 61
+        assertEquals(61, readUnsignedShort(bytes, 6))
         assertFalse(bytes.toString(StandardCharsets.ISO_8859_1).contains("kotlin/"))
     }
 

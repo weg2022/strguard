@@ -50,6 +50,10 @@ class KotlinAndroidPluginFunctionalTest {
         writeFile(
             "gradle.properties",
             buildString {
+                // AGP 9 内置 Kotlin：kotlin.android 插件在 AGP 9 下被禁用；StrGuard 的
+                // KMP/NDK 集成仍依赖旧 DSL，走官方提供的向后兼容路径
+                appendLine("android.builtInKotlin=false")
+                appendLine("android.newDsl=false")
                 appendLine("android.useAndroidX=true")
                 if (nativeBuildEnabled) appendLine("android.builder.sdkDownload=true")
             },
@@ -60,8 +64,8 @@ class KotlinAndroidPluginFunctionalTest {
             import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
             plugins {
-                id("com.android.application") version "8.13.2"
-                id("org.jetbrains.kotlin.android") version "2.1.21"
+                id("com.android.application") version "9.3.1"
+                id("org.jetbrains.kotlin.android") version "2.4.10"
                 id("io.github.weg2022.strguard")
             }
 
