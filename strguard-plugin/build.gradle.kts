@@ -17,7 +17,7 @@ jacoco {
 }
 
 group = "io.github.weg2022"
-version = providers.gradleProperty("strguardVersion").getOrElse("2.0.4")
+version = providers.gradleProperty("strguardVersion").getOrElse("2.0.5")
 
 val androidGradlePluginVersion = "9.3.1"
 val kotlinGradlePluginVersion = "2.4.10"
