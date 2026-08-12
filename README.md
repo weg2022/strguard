@@ -18,20 +18,34 @@ StrGuard supports:
 * ProGuard/R8 verified artifacts and Compose Desktop release ProGuard integration
 * `LDC`, static final strings, Java 9+ `StringConcatFactory`, Kotlin string templates, and the same literals when used in arrays, collections, switches, lambdas, reflection calls, or other ordinary bytecode
 * Optional Kotlin metadata annotation removal
+* Android 15+ 16 KB ELF page alignment for the Native runtime
+* Native-side compile-time string obfuscation: protocol labels, error messages, and the JNI signature are XOR-encrypted at compile time and decoded only at runtime, so `strings`/`.rodata` scans find no plaintext
+* Debug symbols stripped from the Native runtime (no `.symtab`/`.debug_*`)
 
 Supported plugin IDs are `java`, `java-library`, `application`, `org.jetbrains.kotlin.jvm`, `org.jetbrains.kotlin.android`, `com.android.application`, `com.android.library`, and `org.jetbrains.kotlin.multiplatform`. Kotlin Android must be paired with an Android Application or Library plugin.
 
 ## Requirements
 
-* JDK 17 or 21 to run Gradle; protected output requires Java 11 or the original bytecode version, whichever is newer
+* JDK 17 or 21 to run Gradle; protected output requires Java 17 or the original bytecode version, whichever is newer
 * ASM 9.10.1 accepts and preserves Java 11 through Java 27 class files (major 55-71), including Java 27 preview classes; inputs outside that range are unsupported
 * The published plugin shades and relocates ASM into a private namespace, so an older ASM loaded by Gradle, `buildSrc`, or another plugin cannot downgrade class-file support
-* Gradle 8.14.4
+* Gradle 9.5.0
 * Rust/Cargo 1.94.1 with the selected target and linker
-* Kotlin Gradle Plugin 2.1.21
-* Android Gradle Plugin 8.13.2, Android SDK 34, and NDK 27.2.12479018
+* Kotlin Gradle Plugin 2.4.10
+* Android Gradle Plugin 9.3.1, Android SDK 34, and NDK 27.2.12479018
 
 `STRGUARD_CARGO_EXECUTABLE` may select a specific Cargo binary. Its sibling `rustc` and the selected linker/archiver are included in the toolchain fingerprint.
+
+## AGP 9 compatibility
+
+Android Gradle Plugin 9 ships built-in Kotlin support. Kotlin Android modules (the `org.jetbrains.kotlin.android` plugin) must opt out in `gradle.properties` so the plugin and StrGuard use one consistent Kotlin pipeline:
+
+```properties
+android.builtInKotlin=false
+android.newDsl=false
+```
+
+See `samples/kotlin-android-application/gradle.properties` for the current settings.
 
 ## Installation
 
@@ -165,7 +179,7 @@ val shrink = tasks.register<proguard.gradle.ProGuardTask>("proguardMain") {
 }
 val verifiedJar = artifact.verifyShrunkJar(
     shrink.map { layout.buildDirectory.file("shrinker/raw.jar").get() },
-    "proguard:7.9.1",
+    "proguard:7.7.0",
 )
 ```
 
@@ -225,7 +239,7 @@ Set `STRGUARD_ANDROID_NATIVE_TEST=true` and `ANDROID_NDK_VERSION=27.2.12479018` 
 
 ## CI
 
-`ci.yml` covers JDK 17/21, Java 11, six Desktop runners, four-ABI Android/R8, Rust audit/deny/coverage/performance/RSS, reproducibility, dependency verification, distribution, and samples.
+`ci.yml` covers JDK 17/21, six Desktop runners, four-ABI Android/R8 with protection-invariant checks (16 KB ELF alignment and plaintext-free strings), Rust audit/deny/coverage/performance/RSS, reproducibility, dependency verification, distribution, and samples.
 
 ## License
 
