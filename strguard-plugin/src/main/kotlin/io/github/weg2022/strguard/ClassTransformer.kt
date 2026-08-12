@@ -207,7 +207,7 @@ private class StringObfuscationClassVisitor(
             access = access,
             methodName = name,
             descriptor = descriptor,
-            delegate = delegate,
+            rawDelegate = delegate,
             injectStaticFieldInitializers = injectStaticFieldInitializers,
         )
     }
@@ -266,9 +266,9 @@ private class StringObfuscationClassVisitor(
         access: Int,
         private val methodName: String,
         private val descriptor: String,
-        delegate: MethodVisitor,
+        private val rawDelegate: MethodVisitor,
         private val injectStaticFieldInitializers: Boolean,
-    ) : LocalVariablesSorter(Opcodes.ASM9, access, descriptor, delegate) {
+    ) : LocalVariablesSorter(Opcodes.ASM9, access, descriptor, rawDelegate) {
         private var callSiteOrdinal = 0
 
         override fun visitCode() {
@@ -342,6 +342,20 @@ private class StringObfuscationClassVisitor(
             }
         }
 
+        /**
+         * 所有 newLocal 分配的临时槽位都必须经 [rawDelegate] 直接发射,
+         * 绝不能走 super.visitVarInsn(即 LocalVariablesSorter.remap):
+         * ASM 9.7+ 重写后的 LVS,newLocalMapping 不再把新槽位注册进
+         * remappedVariableIndices,super.visitVarInsn 会按"原始局部变量
+         * 索引"解释这些槽位 —— 当方法里恰有同编号的原始局部变量且其
+         * 重映射已建立时,临时槽的 store/load 会被重定向到该原始变量的
+         * 槽上,覆盖仍然存活的变量(例如集合引用被重写的 int 参数覆盖),
+         * 产生数据流非法字节码,ProGuard 优化阶段报
+         * VariableEmptySlotException / VariableTypeException。
+         * newLocal 与 remap 共享同一个单调递增的 nextLocal 计数器,
+         * 因此新槽位永远不会与任何原始局部变量的重映射目标冲突,
+         * 直发底层 visitor 是安全的(与 GeneratorAdapter 同款做法)。
+         */
         private fun rewriteStringConcat(
             descriptor: String,
             recipe: String,
@@ -351,7 +365,7 @@ private class StringObfuscationClassVisitor(
             val dynamicLocals = dynamicTypes.map(::newLocal)
             dynamicTypes.indices.reversed().forEach { index ->
                 val type = dynamicTypes[index]
-                super.visitVarInsn(type.getOpcode(Opcodes.ISTORE), dynamicLocals[index])
+                rawDelegate.visitVarInsn(type.getOpcode(Opcodes.ISTORE), dynamicLocals[index])
             }
 
             val stringBuilderType = Type.getObjectType(STRING_BUILDER)
@@ -359,7 +373,7 @@ private class StringObfuscationClassVisitor(
             super.visitTypeInsn(Opcodes.NEW, STRING_BUILDER)
             super.visitInsn(Opcodes.DUP)
             super.visitMethodInsn(Opcodes.INVOKESPECIAL, STRING_BUILDER, "<init>", "()V", false)
-            super.visitVarInsn(Opcodes.ASTORE, stringBuilderLocal)
+            rawDelegate.visitVarInsn(Opcodes.ASTORE, stringBuilderLocal)
 
             var dynamicArgumentIndex = 0
             var staticArgumentIndex = 0
@@ -388,7 +402,7 @@ private class StringObfuscationClassVisitor(
                 }
             }
             appendLiteral(stringBuilderLocal, literal.toString())
-            super.visitVarInsn(Opcodes.ALOAD, stringBuilderLocal)
+            rawDelegate.visitVarInsn(Opcodes.ALOAD, stringBuilderLocal)
             super.visitMethodInsn(
                 Opcodes.INVOKEVIRTUAL,
                 STRING_BUILDER,
@@ -402,7 +416,7 @@ private class StringObfuscationClassVisitor(
             if (literal.isEmpty()) {
                 return
             }
-            super.visitVarInsn(Opcodes.ALOAD, stringBuilderLocal)
+            rawDelegate.visitVarInsn(Opcodes.ALOAD, stringBuilderLocal)
             if (!protectAndWrite(literal, "concat-literal")) {
                 super.visitLdcInsn(literal)
             }
@@ -417,13 +431,13 @@ private class StringObfuscationClassVisitor(
         }
 
         private fun appendDynamicArgument(stringBuilderLocal: Int, type: Type, local: Int) {
-            super.visitVarInsn(Opcodes.ALOAD, stringBuilderLocal)
+            rawDelegate.visitVarInsn(Opcodes.ALOAD, stringBuilderLocal)
             if (type.descriptor == CHAR_ARRAY_DESCRIPTOR) {
                 // StringConcatFactory 对 char[] 是复制语义（new String(char[]) 复制数组）；
                 // 直接 StringBuilder.append(char[]) 只持有引用，数组后续被修改会改变结果。
                 super.visitTypeInsn(Opcodes.NEW, "java/lang/String")
                 super.visitInsn(Opcodes.DUP)
-                super.visitVarInsn(Opcodes.ALOAD, local)
+                rawDelegate.visitVarInsn(Opcodes.ALOAD, local)
                 super.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/String", "<init>", "([C)V", false)
                 super.visitMethodInsn(
                     Opcodes.INVOKEVIRTUAL,
@@ -435,7 +449,7 @@ private class StringObfuscationClassVisitor(
                 super.visitInsn(Opcodes.POP)
                 return
             }
-            super.visitVarInsn(type.getOpcode(Opcodes.ILOAD), local)
+            rawDelegate.visitVarInsn(type.getOpcode(Opcodes.ILOAD), local)
             super.visitMethodInsn(
                 Opcodes.INVOKEVIRTUAL,
                 STRING_BUILDER,
@@ -447,7 +461,7 @@ private class StringObfuscationClassVisitor(
         }
 
         private fun appendStaticArgument(stringBuilderLocal: Int, argument: Any?) {
-            super.visitVarInsn(Opcodes.ALOAD, stringBuilderLocal)
+            rawDelegate.visitVarInsn(Opcodes.ALOAD, stringBuilderLocal)
             val appendDescriptor =
                 when (argument) {
                     is String -> {
