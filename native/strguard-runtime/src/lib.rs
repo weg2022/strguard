@@ -495,7 +495,10 @@ mod tests {
             VaultError::RuntimeUnavailable,
             VaultError::JvmFailure,
         ] {
-            assert!(!error.message().is_empty(), "decoded error message must not be empty");
+            assert!(
+                !error.message().is_empty(),
+                "decoded error message must not be empty"
+            );
         }
         assert_eq!(
             VaultError::InvalidFormat.message().as_str(),
