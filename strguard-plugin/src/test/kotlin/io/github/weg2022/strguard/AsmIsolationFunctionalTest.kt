@@ -65,6 +65,7 @@ class AsmIsolationFunctionalTest {
         val result =
             GradleRunner.create()
                 .withProjectDir(projectDirectory.toFile())
+                .withTestKitDir(testKitHome().toFile())
                 .withPluginClasspath(listOf(shadowJar.toFile()))
                 .withArguments("transformStrGuardMain", "--stacktrace")
                 .forwardOutput()

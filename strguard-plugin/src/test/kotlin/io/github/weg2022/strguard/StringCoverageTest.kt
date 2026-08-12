@@ -25,7 +25,7 @@ class StringCoverageTest {
         val settings = testSettings()
 
         builder.use { vault ->
-            val result = ClassTransformer.transform(original, settings, vault)
+            val result = ClassTransformer.transform(original, settings, vault, ClassTransformer::class.java.classLoader)
             assertEquals(1, result.stringCoverage.coverageUnknowns)
             assertEquals(1, result.stringCoverage.strictViolations)
         }
@@ -76,6 +76,7 @@ class StringCoverageTest {
                         keepMetadataPackages = emptyList(),
                     ),
                     builder,
+                    ClassTransformer::class.java.classLoader,
                 )
             }
 
@@ -111,6 +112,7 @@ class StringCoverageTest {
                         keepMetadataPackages = emptyList(),
                     ),
                     builder,
+                    ClassTransformer::class.java.classLoader,
                 )
             }
 

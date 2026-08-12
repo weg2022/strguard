@@ -179,11 +179,7 @@ class StrGuardBuildCacheFunctionalTest {
 
     private fun runner(vararg arguments: String): GradleRunner = runner(projectDirectory, *arguments)
 
-    private fun runner(root: Path, vararg arguments: String): GradleRunner = GradleRunner.create()
-        .withProjectDir(root.toFile())
-        .withPluginClasspath()
-        .withArguments(*arguments, "--stacktrace")
-        .forwardOutput()
+    private fun runner(root: Path, vararg arguments: String): GradleRunner = gradleRunnerFor(root, *arguments, withPluginClasspath = true)
 
     private fun writeSettingsFile(root: Path, cachePath: String) {
         writeFile(

@@ -355,10 +355,7 @@ class KotlinMultiplatformPluginFunctionalTest {
         }
     }
 
-    private fun runner(vararg arguments: String): GradleRunner = GradleRunner.create()
-        .withProjectDir(projectDirectory.toFile())
-        .withArguments(*arguments, "--stacktrace")
-        .forwardOutput()
+    private fun runner(vararg arguments: String): GradleRunner = gradleRunnerFor(projectDirectory, *arguments)
 
     private fun writeFile(relativePath: String, contents: String) {
         val file = projectDirectory.resolve(relativePath)

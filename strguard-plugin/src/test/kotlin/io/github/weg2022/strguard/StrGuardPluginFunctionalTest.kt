@@ -487,6 +487,66 @@ class StrGuardPluginFunctionalTest {
     }
 
     @Test
+    fun `transforms classes that merge frames across unrelated project types`() {
+        writeFile(
+            "settings.gradle.kts",
+            """
+            pluginManagement {
+                repositories {
+                    gradlePluginPortal()
+                    mavenCentral()
+                }
+            }
+            rootProject.name = "frame-merge-consumer"
+            """.trimIndent(),
+        )
+        writeFile(
+            "build.gradle.kts",
+            """
+            plugins {
+                kotlin("jvm") version "2.4.10"
+                id("io.github.weg2022.strguard")
+            }
+
+            repositories {
+                mavenCentral()
+            }
+
+            strGuard {
+                releaseSeedHex.set("$TEST_RELEASE_SEED")
+                stringGuardPackages.set(listOf("sample"))
+            }
+            """.trimIndent(),
+        )
+        writeFile(
+            "src/main/kotlin/sample/FrameMerge.kt",
+            """
+            package sample
+
+            class TaskA(val id: String)
+            class TaskB(val id: String)
+
+            class FrameMerger {
+                // if/else 两个分支汇合处产生不同类型(TaskA/TaskB)的帧合并,
+                // COMPUTE_FRAMES 需要加载这两个项目类求公共父类,必须能从编译输出解析。
+                fun merge(flag: Boolean, a: TaskA?, b: TaskB?): Any? = if (flag) a else b
+
+                fun label(): String = "frame-merge-sensitive-label"
+            }
+            """.trimIndent(),
+        )
+
+        val result = runner("classes", "jar").build()
+
+        assertEquals(TaskOutcome.SUCCESS, result.task(":transformStrGuardMain")?.outcome)
+        assertEquals(TaskOutcome.SUCCESS, result.task(":jar")?.outcome)
+        val transformedClasses = projectDirectory.resolve("build/strguard/classes/main")
+        assertFalse(
+            classContains(transformedClasses.resolve("sample/FrameMerger.class"), "frame-merge-sensitive-label"),
+        )
+    }
+
+    @Test
     fun `preserves interned literal identity across protected modules`() {
         writeFile(
             "settings.gradle.kts",
@@ -546,11 +606,7 @@ class StrGuardPluginFunctionalTest {
         }
     }
 
-    private fun runner(vararg arguments: String): GradleRunner = GradleRunner.create()
-        .withProjectDir(projectDirectory.toFile())
-        .withPluginClasspath()
-        .withArguments(*arguments, "--stacktrace")
-        .forwardOutput()
+    private fun runner(vararg arguments: String): GradleRunner = gradleRunnerFor(projectDirectory, *arguments, withPluginClasspath = true)
 
     private fun writeFile(relativePath: String, contents: String) {
         val file = projectDirectory.resolve(relativePath)

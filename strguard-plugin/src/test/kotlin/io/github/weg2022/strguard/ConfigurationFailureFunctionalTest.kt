@@ -221,11 +221,7 @@ class ConfigurationFailureFunctionalTest {
         )
     }
 
-    private fun runner(): GradleRunner = GradleRunner.create()
-        .withProjectDir(projectDirectory.toFile())
-        .withPluginClasspath()
-        .withArguments("transformStrGuardMain", "--stacktrace")
-        .forwardOutput()
+    private fun runner(): GradleRunner = gradleRunnerFor(projectDirectory, "transformStrGuardMain", withPluginClasspath = true)
 
     private fun readSummary(): Properties = Properties().apply {
         Files.newBufferedReader(

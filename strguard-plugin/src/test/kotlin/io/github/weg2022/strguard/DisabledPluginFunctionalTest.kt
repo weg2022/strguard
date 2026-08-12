@@ -164,11 +164,7 @@ class DisabledPluginFunctionalTest {
         Files.list(directory).use { files -> assertEquals(0L, files.count()) }
     }
 
-    private fun runner(vararg arguments: String): GradleRunner = GradleRunner.create()
-        .withProjectDir(projectDirectory.toFile())
-        .withPluginClasspath()
-        .withArguments(*arguments, "--stacktrace")
-        .forwardOutput()
+    private fun runner(vararg arguments: String): GradleRunner = gradleRunnerFor(projectDirectory, *arguments, withPluginClasspath = true)
 
     private fun writeFile(relativePath: String, contents: String) {
         val file = projectDirectory.resolve(relativePath)

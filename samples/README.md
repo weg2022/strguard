@@ -2,7 +2,7 @@
 
 Each directory is an independent Gradle build that loads the StrGuard plugin from this repository through `includeBuild`. The samples cover every supported Gradle project and plugin combination.
 
-Every sample enables `strictStringCoverage` and includes more than a plain literal or concat: static-final/`const val` values, arrays or collections, switch/when branches, lambdas, Unicode, control characters, and multiline strings. The executable Desktop samples assert and print the decoded matrix. The Kotlin Android instrumentation test additionally verifies these values on ART together with literal identity, concurrent first access, and special UTF-16 code units.
+Every sample enables `strictStringCoverage` except `compose-desktop`, whose Compose-compiler-generated `FunctionKeyMeta` annotation strings cannot be protected; each sample includes more than a plain literal or concat: static-final/`const val` values, arrays or collections, switch/when branches, lambdas, Unicode, control characters, and multiline strings. The executable Desktop samples assert and print the decoded matrix. The Kotlin Android instrumentation test additionally verifies these values on ART together with literal identity, concurrent first access, and special UTF-16 code units.
 
 | Sample | Supported plugins demonstrated |
 | --- | --- |
@@ -14,6 +14,7 @@ Every sample enables `strictStringCoverage` and includes more than a plain liter
 | `android-library` | `com.android.library` with Java sources |
 | `kotlin-android-application` | `com.android.application` and `org.jetbrains.kotlin.android` |
 | `kotlin-multiplatform` | `org.jetbrains.kotlin.multiplatform` with protected JVM and unchanged JS targets |
+| `compose-desktop` | `org.jetbrains.kotlin.multiplatform`, `org.jetbrains.compose` and `org.jetbrains.kotlin.plugin.compose` with a protected `jvm("desktop")` target and ProGuard release build |
 
 Protected builds require a private 64-character hexadecimal seed. Set it in the environment rather than adding it to a build script:
 
@@ -29,6 +30,7 @@ Run desktop samples from the repository root with the wrapper, for example:
 .\gradlew.bat -p samples/java-library build
 .\gradlew.bat -p samples/kotlin-jvm run
 .\gradlew.bat -p samples/kotlin-multiplatform jvmJar
+.\gradlew.bat -p samples/compose-desktop createReleaseDistributable
 ```
 
 Desktop builds require Rust 1.94.1 and the target selected for the current host. Android builds additionally require Android SDK 34, NDK `27.2.12479018`, and all configured Rust Android targets:

@@ -61,6 +61,7 @@ class HighClassVersionTest {
                     keepMetadataPackages = emptyList(),
                 ),
                 builder,
+                ClassTransformer::class.java.classLoader,
             ).bytes
         }
     }

@@ -48,6 +48,7 @@ class NativeToolchainFailureFunctionalTest {
         val result =
             GradleRunner.create()
                 .withProjectDir(projectDirectory.toFile())
+                .withTestKitDir(testKitHome().toFile())
                 .withPluginClasspath()
                 .withEnvironment(environment)
                 .withArguments("buildStrGuardNativeMain", "--stacktrace")

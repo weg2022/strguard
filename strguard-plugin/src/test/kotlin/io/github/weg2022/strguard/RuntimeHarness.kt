@@ -33,7 +33,7 @@ internal class RuntimeHarness(
         val recorded = mutableListOf<ProtectedRecord>()
         val (transformedBytes, coverage, bridgeModel) =
             RecordingVaultBuilder(TEST_SEED, moduleIdentity, CryptoPrimitives.sha256(original), recorded).use { builder ->
-                val result = ClassTransformer.transform(original, settings, builder)
+                val result = ClassTransformer.transform(original, settings, builder, ClassTransformer::class.java.classLoader)
                 Triple(result.bytes, result.stringCoverage, builder.bridge)
             }
         val bridgeBytes = stubBridgeBytes(bridgeModel, recorded)

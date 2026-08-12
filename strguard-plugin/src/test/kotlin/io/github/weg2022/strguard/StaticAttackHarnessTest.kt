@@ -41,6 +41,7 @@ class StaticAttackHarnessTest {
                     keepMetadataPackages = emptyList(),
                 ),
                 vaultBuilder,
+                ClassTransformer::class.java.classLoader,
             )
         vaultBuilder.writeNativeInputs(temporaryDirectory).close()
         vaultBuilder.close()
