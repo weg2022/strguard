@@ -59,6 +59,10 @@ class NativeProcessRunnerTest {
 
         val windowsFlags = encodedReproducibleRustFlags(buildRoot, "x86_64-pc-windows-msvc").split('\u001f')
         assertEquals("-Clink-arg=/Brepro", windowsFlags.last())
+
+        val androidFlags = encodedReproducibleRustFlags(buildRoot, "aarch64-linux-android").split("\u001f")
+        // Android 15+ 16 KB page size：链接器段对齐必须为 16384
+        assertEquals("-Clink-arg=-Wl,-z,max-page-size=16384", androidFlags.last())
     }
 
     @Test
