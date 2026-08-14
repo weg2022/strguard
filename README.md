@@ -53,7 +53,7 @@ Apply StrGuard from the Gradle Plugin Portal to every JVM or Android module that
 
 ```kotlin
 plugins {
-    id("io.github.weg2022.strguard") version "3.1.0"
+    id("io.github.weg2022.strguard") version "3.1.1"
 }
 ```
 
