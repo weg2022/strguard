@@ -66,7 +66,7 @@ abstract class TransformClassesTask : DefaultTask() {
     abstract val consoleOutput: Property<Boolean>
 
     @get:Input
-    abstract val removeMetadata: Property<Boolean>
+    abstract val removeSourceDebugExtension: Property<Boolean>
 
     @get:Input
     abstract val stringGuardPackages: ListProperty<String>
@@ -75,10 +75,10 @@ abstract class TransformClassesTask : DefaultTask() {
     abstract val keepStringPackages: ListProperty<String>
 
     @get:Input
-    abstract val removeMetadataPackages: ListProperty<String>
+    abstract val removeSourceDebugExtensionPackages: ListProperty<String>
 
     @get:Input
-    abstract val keepMetadataPackages: ListProperty<String>
+    abstract val keepSourceDebugExtensionPackages: ListProperty<String>
 
     @TaskAction
     fun transform() {
@@ -87,11 +87,11 @@ abstract class TransformClassesTask : DefaultTask() {
                 enabled = stringGuardEnabled.get(),
                 java9StringConcatEnabled = java9StringConcatEnabled.get(),
                 strictStringCoverage = strictStringCoverage.get(),
-                removeMetadata = removeMetadata.get(),
+                removeSourceDebugExtension = removeSourceDebugExtension.get(),
                 stringGuardPackages = stringGuardPackages.get(),
                 keepStringPackages = keepStringPackages.get(),
-                removeMetadataPackages = removeMetadataPackages.get(),
-                keepMetadataPackages = keepMetadataPackages.get(),
+                removeSourceDebugExtensionPackages = removeSourceDebugExtensionPackages.get(),
+                keepSourceDebugExtensionPackages = keepSourceDebugExtensionPackages.get(),
             )
         val sources = collectInputFiles()
         // COMPUTE_FRAMES 合并帧时需要加载项目类型(见 FramesComputingClassWriter)：
@@ -135,11 +135,11 @@ abstract class TransformClassesTask : DefaultTask() {
                     runtimeTarget = DISABLED_STRGUARD_VALUE,
                     selection = selection,
                     stringCoverage = StringCoverage(),
-                    removedMetadata = 0,
+                    removedSourceDebugExtensions = 0,
                 ),
             )
             commitOutputs(destination, destinationOutput, nativeInputs, nativeInputsOutput, reports, reportsOutput)
-            logSummary(StringCoverage(), removedMetadata = 0)
+            logSummary(StringCoverage(), removedSourceDebugExtensions = 0)
             return
         }
 
@@ -154,7 +154,7 @@ abstract class TransformClassesTask : DefaultTask() {
             }
 
         vaultBuilder.use { builder ->
-            val metadataMappings = linkedSetOf<String>()
+            val removedSourceDebugExtensions = linkedSetOf<String>()
             var stringCoverage = StringCoverage()
             sources.forEach { source ->
                 val target = destination.resolve(source.relativePath)
@@ -164,7 +164,7 @@ abstract class TransformClassesTask : DefaultTask() {
                     val className = ClassReader(originalBytes).className
                     if (settings.shouldTransformClass(className)) {
                         val result = ClassTransformer.transform(originalBytes, settings, builder, projectClassLoader)
-                        metadataMappings.addAll(result.metadataMappings)
+                        removedSourceDebugExtensions.addAll(result.removedSourceDebugExtensions)
                         stringCoverage = stringCoverage.plus(result.stringCoverage)
                         Files.write(target, result.bytes)
                     } else {
@@ -185,14 +185,14 @@ abstract class TransformClassesTask : DefaultTask() {
                     runtimeTarget = nativeTarget.rustTriple,
                     selection = selection,
                     stringCoverage = stringCoverage,
-                    removedMetadata = metadataMappings.size,
+                    removedSourceDebugExtensions = removedSourceDebugExtensions.size,
                 )
             handleCoverage(settings, stringCoverage, reports, reportsOutput, report)
             SupportClassFiles.writeRuntime(destination, builder.bridge)
             builder.writeNativeInputs(nativeInputs).close()
             writeReport(reports, report)
             commitOutputs(destination, destinationOutput, nativeInputs, nativeInputsOutput, reports, reportsOutput)
-            logSummary(stringCoverage, metadataMappings.size)
+            logSummary(stringCoverage, removedSourceDebugExtensions.size)
         }
     }
 
@@ -228,11 +228,11 @@ abstract class TransformClassesTask : DefaultTask() {
         logger.warn("$violation; enable strictStringCoverage to fail the build")
     }
 
-    private fun logSummary(stringCoverage: StringCoverage, removedMetadata: Int) {
+    private fun logSummary(stringCoverage: StringCoverage, removedSourceDebugExtensions: Int) {
         if (consoleOutput.get()) {
             logger.lifecycle(
                 "StrGuard protected ${stringCoverage.protectedStrings} string locations, skipped " +
-                    "${stringCoverage.skippedStrings}, and removed $removedMetadata metadata annotations",
+                    "${stringCoverage.skippedStrings}, and removed $removedSourceDebugExtensions source debug extensions",
             )
         }
     }

@@ -97,11 +97,11 @@ class RuntimeUnsupportedConcatTest {
         enabled = true,
         java9StringConcatEnabled = false,
         strictStringCoverage = true,
-        removeMetadata = false,
+        removeSourceDebugExtension = false,
         stringGuardPackages = listOf("sample"),
         keepStringPackages = emptyList(),
-        removeMetadataPackages = emptyList(),
-        keepMetadataPackages = emptyList(),
+        removeSourceDebugExtensionPackages = emptyList(),
+        keepSourceDebugExtensionPackages = emptyList(),
     )
 
     private fun fixture(

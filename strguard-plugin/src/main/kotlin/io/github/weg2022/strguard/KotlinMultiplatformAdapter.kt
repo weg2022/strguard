@@ -96,18 +96,18 @@ internal object KotlinMultiplatformAdapter {
             task.java9StringConcatEnabled.convention(extension.java9StringConcatEnabled)
             task.strictStringCoverage.convention(extension.strictStringCoverage)
             task.consoleOutput.convention(extension.consoleOutput)
-            task.removeMetadata.convention(extension.removeMetadata)
+            task.removeSourceDebugExtension.convention(extension.removeSourceDebugExtension)
             task.stringGuardPackages.convention(
                 project.strGuardPackageSelectors(extension, extension.stringGuardPackages, "stringGuardPackages"),
             )
             task.keepStringPackages.convention(
                 project.strGuardPackageSelectors(extension, extension.keepStringPackages, "keepStringPackages"),
             )
-            task.removeMetadataPackages.convention(
-                project.strGuardPackageSelectors(extension, extension.removeMetadataPackages, "removeMetadataPackages"),
+            task.removeSourceDebugExtensionPackages.convention(
+                project.strGuardPackageSelectors(extension, extension.removeSourceDebugExtensionPackages, "removeSourceDebugExtensionPackages"),
             )
-            task.keepMetadataPackages.convention(
-                project.strGuardPackageSelectors(extension, extension.keepMetadataPackages, "keepMetadataPackages"),
+            task.keepSourceDebugExtensionPackages.convention(
+                project.strGuardPackageSelectors(extension, extension.keepSourceDebugExtensionPackages, "keepSourceDebugExtensionPackages"),
             )
         }
 

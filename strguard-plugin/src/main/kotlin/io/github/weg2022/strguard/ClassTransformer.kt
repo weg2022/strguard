@@ -8,7 +8,7 @@ import org.objectweb.asm.commons.LocalVariablesSorter
 
 internal class ClassTransformResult(
     val bytes: ByteArray,
-    val metadataMappings: Set<String>,
+    val removedSourceDebugExtensions: Set<String>,
     val stringCoverage: StringCoverage,
 )
 
@@ -27,7 +27,7 @@ internal object ClassTransformer {
             StringObfuscationClassVisitor(
                 settings = settings,
                 processStrings = settings.shouldTransformStrings(className) && !exclusions.keepStrings,
-                processMetadata = settings.shouldRemoveMetadata(className) && !exclusions.keepMetadata,
+                removeSourceDebugExtension = settings.shouldRemoveSourceDebugExtension(className) && !exclusions.keepSourceDebugExtension,
                 vaultBuilder = vaultBuilder,
                 stringCoverage = stringCoverage,
                 delegate = FramesComputingClassWriter(classLoader),
@@ -35,7 +35,7 @@ internal object ClassTransformer {
         classReader.accept(visitor, ClassReader.EXPAND_FRAMES)
         return ClassTransformResult(
             bytes = visitor.toByteArray(),
-            metadataMappings = visitor.metadataMappings(),
+            removedSourceDebugExtensions = visitor.removedSourceDebugExtensions(),
             stringCoverage = stringCoverage.snapshot(),
         )
     }
@@ -43,25 +43,25 @@ internal object ClassTransformer {
 
 private data class ClassExclusions(
     val keepStrings: Boolean,
-    val keepMetadata: Boolean,
+    val keepSourceDebugExtension: Boolean,
 ) {
     companion object {
         fun scan(classBytes: ByteArray): ClassExclusions {
             var keepStrings = false
-            var keepMetadata = false
+            var keepSourceDebugExtension = false
             ClassReader(classBytes).accept(
                 object : ClassVisitor(Opcodes.ASM9) {
                     override fun visitAnnotation(descriptor: String?, visible: Boolean): AnnotationVisitor? {
                         when (descriptor) {
                             KEEP_STRING_ANNOTATION -> keepStrings = true
-                            KEEP_METADATA_ANNOTATION -> keepMetadata = true
+                            KEEP_SOURCE_DEBUG_EXTENSION_ANNOTATION -> keepSourceDebugExtension = true
                         }
                         return null
                     }
                 },
                 ClassReader.SKIP_CODE or ClassReader.SKIP_DEBUG or ClassReader.SKIP_FRAMES,
             )
-            return ClassExclusions(keepStrings, keepMetadata)
+            return ClassExclusions(keepStrings, keepSourceDebugExtension)
         }
     }
 }
@@ -108,13 +108,13 @@ private class FramesComputingClassWriter(
 private class StringObfuscationClassVisitor(
     private val settings: TransformSettings,
     private val processStrings: Boolean,
-    private val processMetadata: Boolean,
+    private val removeSourceDebugExtension: Boolean,
     private val vaultBuilder: SecureVaultBuilder,
     private val stringCoverage: MutableStringCoverage,
     delegate: ClassWriter,
 ) : ClassVisitor(Opcodes.ASM9, delegate) {
     private val staticFinalFields = mutableListOf<StaticStringField>()
-    private val removedMetadata = linkedSetOf<String>()
+    private val removedSourceDebugExtensions = linkedSetOf<String>()
     private var className = ""
     private var hasClassInitializer = false
 
@@ -131,14 +131,29 @@ private class StringObfuscationClassVisitor(
     }
 
     override fun visitAnnotation(descriptor: String?, visible: Boolean): AnnotationVisitor? {
-        if (descriptor in KOTLIN_METADATA_ANNOTATIONS) {
-            if (processMetadata) {
-                removedMetadata += "$className $descriptor"
+        if (descriptor in KOTLIN_COMPILER_ANNOTATIONS) {
+            // kotlin.Metadata 永远保留：kotlin-reflect/序列化等运行时依赖其类型信息。
+            // 编译器注解整体不透传 trackedAnnotation，其字符串值(如 d1/d2)绝不当作
+            // 应用字符串计数，否则 strictStringCoverage 会在 Kotlin 项目上误报。
+            if (descriptor in REMOVABLE_DEBUG_ANNOTATIONS && removeSourceDebugExtension) {
+                removedSourceDebugExtensions += "$className $descriptor"
                 return null
             }
             return super.visitAnnotation(descriptor, visible)
         }
         return trackedAnnotation(super.visitAnnotation(descriptor, visible))
+    }
+
+    /**
+     * Kotlin 编译器在 class file 中写入 SourceDebugExtension 属性(SMAP 源码映射),
+     * 经 visitSource 的 debug 参数传递。该信息仅服务调试器,移除它不破坏运行时,
+     * 还能隐藏源码行号映射;SourceFile(source) 保留。
+     */
+    override fun visitSource(source: String?, debug: String?) {
+        if (removeSourceDebugExtension && debug != null) {
+            removedSourceDebugExtensions += "$className SourceDebugExtension"
+        }
+        super.visitSource(source, if (removeSourceDebugExtension) null else debug)
     }
 
     override fun visitTypeAnnotation(
@@ -229,7 +244,7 @@ private class StringObfuscationClassVisitor(
 
     fun toByteArray(): ByteArray = (cv as ClassWriter).toByteArray()
 
-    fun metadataMappings(): Set<String> = removedMetadata
+    fun removedSourceDebugExtensions(): Set<String> = removedSourceDebugExtensions
 
     private fun protect(rawValue: String, callSiteIdentity: String): VaultReference? = when (val result = vaultBuilder.protect(rawValue, callSiteIdentity)) {
         is VaultProtectionResult.Protected -> {
@@ -684,15 +699,24 @@ private data class StaticStringField(val name: String, val reference: VaultRefer
 private const val STRING_DESCRIPTOR = "Ljava/lang/String;"
 private const val CHAR_ARRAY_DESCRIPTOR = "[C"
 private const val KEEP_STRING_ANNOTATION = "Lio/github/weg2022/strguard/annotation/KeepString;"
-private const val KEEP_METADATA_ANNOTATION = "Lio/github/weg2022/strguard/annotation/KeepMetadata;"
+private const val KEEP_SOURCE_DEBUG_EXTENSION_ANNOTATION = "Lio/github/weg2022/strguard/annotation/KeepSourceDebugExtension;"
 private const val STRING_CONCAT_FACTORY = "java/lang/invoke/StringConcatFactory"
 private const val STRING_BUILDER = "java/lang/StringBuilder"
 private const val GATEWAY_DESCRIPTOR = "(JJ)Ljava/lang/String;"
 private const val DYNAMIC_ARGUMENT_MARKER = '\u0001'
 private const val STATIC_ARGUMENT_MARKER = '\u0002'
-private val KOTLIN_METADATA_ANNOTATIONS =
+
+// 编译器注解全集：无论移除开关如何，都透传且不跟踪其字符串值(见 visitAnnotation)
+private val KOTLIN_COMPILER_ANNOTATIONS =
     setOf(
         "Lkotlin/Metadata;",
+        "Lkotlin/coroutines/jvm/internal/DebugMetadata;",
+        "Lkotlin/jvm/internal/SourceDebugExtension;",
+    )
+
+// 可移除的纯调试注解；kotlin.Metadata 永远不在此集合
+private val REMOVABLE_DEBUG_ANNOTATIONS =
+    setOf(
         "Lkotlin/coroutines/jvm/internal/DebugMetadata;",
         "Lkotlin/jvm/internal/SourceDebugExtension;",
     )

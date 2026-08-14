@@ -4,31 +4,31 @@ internal class TransformSettings(
     val enabled: Boolean,
     val java9StringConcatEnabled: Boolean,
     val strictStringCoverage: Boolean = false,
-    val removeMetadata: Boolean,
+    val removeSourceDebugExtension: Boolean,
     stringGuardPackages: List<String>,
     keepStringPackages: List<String>,
-    removeMetadataPackages: List<String>,
-    keepMetadataPackages: List<String>,
+    removeSourceDebugExtensionPackages: List<String>,
+    keepSourceDebugExtensionPackages: List<String>,
 ) {
     val stringGuardPackages: List<String> =
         normalizePackageSelectors("stringGuardPackages", stringGuardPackages)
     val keepStringPackages: List<String> =
         normalizePackageSelectors("keepStringPackages", keepStringPackages)
-    val removeMetadataPackages: List<String> =
-        normalizePackageSelectors("removeMetadataPackages", removeMetadataPackages)
-    val keepMetadataPackages: List<String> =
-        normalizePackageSelectors("keepMetadataPackages", keepMetadataPackages)
+    val removeSourceDebugExtensionPackages: List<String> =
+        normalizePackageSelectors("removeSourceDebugExtensionPackages", removeSourceDebugExtensionPackages)
+    val keepSourceDebugExtensionPackages: List<String> =
+        normalizePackageSelectors("keepSourceDebugExtensionPackages", keepSourceDebugExtensionPackages)
 
-    fun shouldTransformClass(internalClassName: String): Boolean = shouldTransformStrings(internalClassName) || shouldRemoveMetadata(internalClassName)
+    fun shouldTransformClass(internalClassName: String): Boolean = shouldTransformStrings(internalClassName) || shouldRemoveSourceDebugExtension(internalClassName)
 
     fun shouldTransformStrings(internalClassName: String): Boolean = isEligibleClass(internalClassName) &&
         matchesIncludedPackages(internalClassName, stringGuardPackages) &&
         !matchesAnyPackage(internalClassName, keepStringPackages)
 
-    fun shouldRemoveMetadata(internalClassName: String): Boolean = isEligibleClass(internalClassName) &&
-        removeMetadata &&
-        matchesIncludedPackages(internalClassName, removeMetadataPackages) &&
-        !matchesAnyPackage(internalClassName, keepMetadataPackages)
+    fun shouldRemoveSourceDebugExtension(internalClassName: String): Boolean = isEligibleClass(internalClassName) &&
+        removeSourceDebugExtension &&
+        matchesIncludedPackages(internalClassName, removeSourceDebugExtensionPackages) &&
+        !matchesAnyPackage(internalClassName, keepSourceDebugExtensionPackages)
 
     fun analyzeClasses(
         internalClassNames: List<String>,
@@ -41,16 +41,16 @@ internal class TransformSettings(
                 matchedClasses = 0,
                 skippedClasses = 0,
                 unmatchedKeepStringPackages = emptyList(),
-                unmatchedKeepMetadataPackages = emptyList(),
+                unmatchedKeepSourceDebugExtensions = emptyList(),
             )
         }
 
         val eligibleClassNames = internalClassNames.filter(::isEligibleClass)
         validateExplicitIncludes("stringGuardPackages", stringGuardPackages, eligibleClassNames)
-        if (removeMetadata) {
+        if (removeSourceDebugExtension) {
             validateExplicitIncludes(
-                "removeMetadataPackages",
-                removeMetadataPackages,
+                "removeSourceDebugExtensionPackages",
+                removeSourceDebugExtensionPackages,
                 eligibleClassNames,
             )
         }
@@ -61,7 +61,7 @@ internal class TransformSettings(
             matchedClasses = matchedClasses,
             skippedClasses = eligibleClassNames.size - matchedClasses,
             unmatchedKeepStringPackages = unmatchedSelectors(keepStringPackages, eligibleClassNames),
-            unmatchedKeepMetadataPackages = unmatchedSelectors(keepMetadataPackages, eligibleClassNames),
+            unmatchedKeepSourceDebugExtensions = unmatchedSelectors(keepSourceDebugExtensionPackages, eligibleClassNames),
         )
     }
 
@@ -101,13 +101,13 @@ internal data class ClassSelectionSummary(
     val matchedClasses: Int,
     val skippedClasses: Int,
     val unmatchedKeepStringPackages: List<String>,
-    val unmatchedKeepMetadataPackages: List<String>,
+    val unmatchedKeepSourceDebugExtensions: List<String>,
 ) {
     fun warningMessages(): List<String> = unmatchedKeepStringPackages.map { selector ->
         "StrGuard keepStringPackages selector '$selector' did not match any eligible class"
     } +
-        unmatchedKeepMetadataPackages.map { selector ->
-            "StrGuard keepMetadataPackages selector '$selector' did not match any eligible class"
+        unmatchedKeepSourceDebugExtensions.map { selector ->
+            "StrGuard keepSourceDebugExtensionPackages selector '$selector' did not match any eligible class"
         }
 }
 
@@ -117,10 +117,10 @@ internal data class TransformReport(
     val runtimeTarget: String,
     val selection: ClassSelectionSummary,
     val stringCoverage: StringCoverage,
-    val removedMetadata: Int,
+    val removedSourceDebugExtensions: Int,
 ) {
     fun asPropertiesText(): String = buildString {
-        appendLine("schemaVersion=1")
+        appendLine("schemaVersion=2")
         appendLine("enabled=$enabled")
         appendLine("strictStringCoverage=$strictStringCoverage")
         appendLine("runtimeTarget=$runtimeTarget")
@@ -136,12 +136,12 @@ internal data class TransformReport(
         StringSkipReason.entries.forEach { reason ->
             appendLine("${reason.reportProperty}=${stringCoverage.skipped(reason)}")
         }
-        appendLine("removedMetadata=$removedMetadata")
+        appendLine("removedSourceDebugExtensions=$removedSourceDebugExtensions")
         appendLine(
             "unmatchedKeepStringPackages=${selection.unmatchedKeepStringPackages.joinToString(",")}",
         )
         appendLine(
-            "unmatchedKeepMetadataPackages=${selection.unmatchedKeepMetadataPackages.joinToString(",")}",
+            "unmatchedKeepSourceDebugExtensions=${selection.unmatchedKeepSourceDebugExtensions.joinToString(",")}",
         )
     }
 }

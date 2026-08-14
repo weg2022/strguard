@@ -49,8 +49,9 @@ strGuard {
     stringGuardPackages.set(listOf("sample"))
     // Compose 编译器会在 composable 方法上生成 FunctionKeyMeta 注解(key 字符串),
     // 该内部机制字符串无法保护;strictStringCoverage 会因此失败,示例不开启。
-    // removeMetadata 移除 SourceDebugExtension/kotlin.Metadata 等编译器元数据注解
-    removeMetadata.set(true)
-    removeMetadataPackages.set(listOf("sample"))
+    // removeSourceDebugExtension 移除 SourceDebugExtension(SMAP)/DebugMetadata 调试元数据;
+    // kotlin.Metadata 始终保留
+    removeSourceDebugExtension.set(true)
+    removeSourceDebugExtensionPackages.set(listOf("sample"))
     consoleOutput.set(true)
 }

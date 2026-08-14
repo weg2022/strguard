@@ -231,13 +231,13 @@ class StrGuardPluginFunctionalTest {
                 "skippedUnsupportedStringConcats",
                 "skippedUnsupportedInvokeDynamics",
                 "skippedUnsupportedFieldStrings",
-                "removedMetadata",
+                "removedSourceDebugExtensions",
                 "unmatchedKeepStringPackages",
-                "unmatchedKeepMetadataPackages",
+                "unmatchedKeepSourceDebugExtensions",
             ),
             summary.stringPropertyNames(),
         )
-        assertEquals("1", summary.getProperty("schemaVersion"))
+        assertEquals("2", summary.getProperty("schemaVersion"))
         assertEquals("true", summary.getProperty("enabled"))
         assertEquals("true", summary.getProperty("strictStringCoverage"))
         assertEquals(nativeTarget.rustTriple, summary.getProperty("runtimeTarget"))
@@ -249,7 +249,7 @@ class StrGuardPluginFunctionalTest {
         assertEquals("0", summary.getProperty("skippedStrings"))
         assertEquals("0", summary.getProperty("strictViolations"))
         assertEquals("0", summary.getProperty("coverageUnknowns"))
-        assertEquals("0", summary.getProperty("removedMetadata"))
+        assertEquals("0", summary.getProperty("removedSourceDebugExtensions"))
         assertFalse(reportText.contains(TEST_RELEASE_SEED))
         assertFalse(reportText.contains("java-constant"))
         assertFalse(reportText.contains("prefix-"))
@@ -390,8 +390,8 @@ class StrGuardPluginFunctionalTest {
                 stringGuardPackages.set(listOf("sample"))
                 strictStringCoverage.set(true)
                 consoleOutput.set(true)
-                removeMetadata.set(true)
-                removeMetadataPackages.set(listOf("sample"))
+                removeSourceDebugExtension.set(true)
+                removeSourceDebugExtensionPackages.set(listOf("sample"))
             }
             """.trimIndent(),
         )
@@ -401,12 +401,17 @@ class StrGuardPluginFunctionalTest {
             package sample
 
             import io.github.weg2022.strguard.annotation.KeepString
-            import io.github.weg2022.strguard.annotation.KeepMetadata
+            import io.github.weg2022.strguard.annotation.KeepSourceDebugExtension
 
             const val EXPOSED = "kotlin-constant"
 
+            // inline 函数使 kotlinc 在该类的 SourceDebugExtension 属性中写入 SMAP 映射
+            inline fun String.wrap(): String = "<${'$'}this>"
+
             class KotlinExample {
                 fun reveal(value: String): String = "prefix-${'$'}value-suffix"
+
+                fun wrappedValue(value: String): String = value.wrap()
 
                 fun preservesLiteralIdentity(): Boolean =
                     localIdentity() === KotlinIdentityPeer.sharedIdentity() &&
@@ -431,6 +436,17 @@ class StrGuardPluginFunctionalTest {
 
                 fun lambdaValue(): String = { "kotlin-lambda-sensitive-value" }()
 
+                // 触发 kotlin.coroutines.jvm.internal.DebugMetadata 注解:
+                // 含 suspend lambda 的状态机才会生成 continuation 内部类
+                suspend fun suspendValue(): String {
+                    val nested = suspendCall { compute() }
+                    return "value-${'$'}nested"
+                }
+
+                private suspend fun suspendCall(block: suspend () -> Int): Int = block()
+
+                private suspend fun compute(): Int = 42
+
                 fun specialUtf16(): String = "prefix\u0000\uD800middle\uDC00\uD83D\uDE00suffix"
             }
 
@@ -443,8 +459,8 @@ class StrGuardPluginFunctionalTest {
                 fun reveal(): String = "kept-kotlin-value"
             }
 
-            @KeepMetadata
-            class MetadataKeptExample
+            @KeepSourceDebugExtension
+            class SourceDebugKeptExample
             """.trimIndent(),
         )
 
@@ -456,8 +472,27 @@ class StrGuardPluginFunctionalTest {
         assertFalse(classContains(transformedClasses.resolve("sample/KotlinExampleKt.class"), "kotlin-constant"))
         assertFalse(classContains(transformedClasses.resolve("sample/KotlinExample.class"), "prefix-"))
         assertTrue(classContains(transformedClasses.resolve("sample/KeptExample.class"), "kept-kotlin-value"))
-        assertFalse(hasClassAnnotation(transformedClasses.resolve("sample/KotlinExample.class"), "Lkotlin/Metadata;"))
-        assertTrue(hasClassAnnotation(transformedClasses.resolve("sample/MetadataKeptExample.class"), "Lkotlin/Metadata;"))
+        // kotlin.Metadata 永远保留：kotlin-reflect/序列化等运行时依赖其类型信息
+        assertTrue(hasClassAnnotation(transformedClasses.resolve("sample/KotlinExample.class"), "Lkotlin/Metadata;"))
+        assertTrue(hasClassAnnotation(transformedClasses.resolve("sample/SourceDebugKeptExample.class"), "Lkotlin/Metadata;"))
+        // SourceDebugExtension 注解形式被移除
+        assertFalse(hasClassAnnotation(transformedClasses.resolve("sample/KotlinExample.class"), "Lkotlin/jvm/internal/SourceDebugExtension;"))
+        // suspend 函数生成的 continuation 内部类不再携带 DebugMetadata 注解
+        val continuations = Files.list(transformedClasses.resolve("sample")).use { stream ->
+            stream.filter { file -> file.fileName.toString().startsWith("KotlinExample$") }.toList()
+        }
+        assertTrue(continuations.isNotEmpty(), "suspend 函数应生成 continuation 内部类")
+        continuations.forEach { continuation ->
+            assertFalse(
+                hasClassAnnotation(continuation, "Lkotlin/coroutines/jvm/internal/DebugMetadata;"),
+                "continuation 应移除 DebugMetadata: ${continuation.fileName}",
+            )
+        }
+        // SMAP 属性移除：原始 class 保留 SMAP，转换后 debug 被丢弃而 SourceFile 保留
+        val originalKotlinExample = projectDirectory.resolve("build/classes/kotlin/main/sample/KotlinExample.class")
+        assertNotNull(classSourceDebug(originalKotlinExample), "kotlinc 应输出 SourceDebugExtension 属性")
+        assertNull(classSourceDebug(transformedClasses.resolve("sample/KotlinExample.class")))
+        assertNotNull(classSourceFile(transformedClasses.resolve("sample/KotlinExample.class")), "SourceFile 应保留")
 
         URLClassLoader(
             arrayOf(transformedClasses.toUri().toURL(), nativeResources.toUri().toURL()),
@@ -705,6 +740,38 @@ class StrGuardPluginFunctionalTest {
             ClassReader.SKIP_CODE or ClassReader.SKIP_DEBUG or ClassReader.SKIP_FRAMES,
         )
         return found
+    }
+
+    // 读取 SourceDebugExtension 属性(SMAP)。哨兵 null 区分"未调用 visitSource"与"以 null 调用"。
+    // 注意不能用 SKIP_DEBUG:它会跳过 visitSource 回调。
+    private fun classSourceDebug(classFile: Path): String? {
+        var debug: String? = null
+        var visited = false
+        ClassReader(Files.readAllBytes(classFile)).accept(
+            object : ClassVisitor(Opcodes.ASM9) {
+                override fun visitSource(source: String?, debugValue: String?) {
+                    visited = true
+                    debug = debugValue
+                }
+            },
+            ClassReader.SKIP_CODE or ClassReader.SKIP_FRAMES,
+        )
+        return if (visited) debug else null
+    }
+
+    private fun classSourceFile(classFile: Path): String? {
+        var source: String? = null
+        var visited = false
+        ClassReader(Files.readAllBytes(classFile)).accept(
+            object : ClassVisitor(Opcodes.ASM9) {
+                override fun visitSource(sourceValue: String?, debug: String?) {
+                    visited = true
+                    source = sourceValue
+                }
+            },
+            ClassReader.SKIP_CODE or ClassReader.SKIP_FRAMES,
+        )
+        return if (visited) source else null
     }
 
     private fun tamperEmbeddedVault(nativeLibrary: Path, vaultFile: Path) {

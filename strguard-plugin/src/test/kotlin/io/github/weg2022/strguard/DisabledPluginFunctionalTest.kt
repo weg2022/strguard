@@ -50,7 +50,7 @@ class DisabledPluginFunctionalTest {
 
             strGuard {
                 enabled.set(false)
-                removeMetadata.set(true)
+                removeSourceDebugExtension.set(true)
                 releaseSeedHex.set(providers.provider<String> {
                     error("disabled release seed Provider was evaluated")
                 })
@@ -114,7 +114,7 @@ class DisabledPluginFunctionalTest {
         assertContentEquals(Files.readAllBytes(originalClass), Files.readAllBytes(transformedClass))
         assertEquals(
             """
-            schemaVersion=1
+            schemaVersion=2
             enabled=false
             strictStringCoverage=false
             runtimeTarget=disabled
@@ -135,9 +135,9 @@ class DisabledPluginFunctionalTest {
             skippedUnsupportedStringConcats=0
             skippedUnsupportedInvokeDynamics=0
             skippedUnsupportedFieldStrings=0
-            removedMetadata=0
+            removedSourceDebugExtensions=0
             unmatchedKeepStringPackages=
-            unmatchedKeepMetadataPackages=
+            unmatchedKeepSourceDebugExtensions=
 
             """.trimIndent(),
             Files.readString(projectDirectory.resolve("build/reports/strguard/main/summary.txt")),

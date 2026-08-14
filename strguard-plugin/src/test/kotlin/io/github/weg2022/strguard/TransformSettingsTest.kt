@@ -7,13 +7,13 @@ class TransformSettingsTest {
     fun `enabled is a total transformation switch`() {
         val settings = settings(
             enabled = false,
-            removeMetadata = true,
+            removeSourceDebugExtension = true,
             stringGuardPackages = listOf("sample"),
-            removeMetadataPackages = listOf("sample"),
+            removeSourceDebugExtensionPackages = listOf("sample"),
         )
 
         assertFalse(settings.shouldTransformStrings("sample/Example"))
-        assertFalse(settings.shouldRemoveMetadata("sample/Example"))
+        assertFalse(settings.shouldRemoveSourceDebugExtension("sample/Example"))
         assertFalse(settings.shouldTransformClass("sample/Example"))
     }
 
@@ -21,18 +21,18 @@ class TransformSettingsTest {
     fun `package matching respects segment boundaries and keep rules`() {
         val settings = settings(
             enabled = true,
-            removeMetadata = true,
+            removeSourceDebugExtension = true,
             stringGuardPackages = listOf("sample.app"),
             keepStringPackages = listOf("sample.app.public"),
-            removeMetadataPackages = listOf("sample.app"),
-            keepMetadataPackages = listOf("sample.app.reflective"),
+            removeSourceDebugExtensionPackages = listOf("sample.app"),
+            keepSourceDebugExtensionPackages = listOf("sample.app.reflective"),
         )
 
         assertTrue(settings.shouldTransformStrings("sample/app/internal/Secret"))
         assertFalse(settings.shouldTransformStrings("sample/application/NotIncluded"))
         assertFalse(settings.shouldTransformStrings("sample/app/public/Api"))
-        assertTrue(settings.shouldRemoveMetadata("sample/app/internal/Secret"))
-        assertFalse(settings.shouldRemoveMetadata("sample/app/reflective/Model"))
+        assertTrue(settings.shouldRemoveSourceDebugExtension("sample/app/internal/Secret"))
+        assertFalse(settings.shouldRemoveSourceDebugExtension("sample/app/reflective/Model"))
         assertFalse(settings.shouldTransformClass("io/github/weg2022/strguard/generated/Bridge"))
     }
 
@@ -40,7 +40,7 @@ class TransformSettingsTest {
     fun `package selectors are normalized deduplicated and sorted`() {
         val settings = settings(
             enabled = true,
-            removeMetadata = true,
+            removeSourceDebugExtension = true,
             stringGuardPackages = listOf(" sample.other/ ", "/sample.app", "sample.app"),
             keepStringPackages = listOf("sample.app.public/"),
         )
@@ -56,7 +56,7 @@ class TransformSettingsTest {
             val failure = assertFailsWith<IllegalArgumentException> {
                 settings(
                     enabled = true,
-                    removeMetadata = false,
+                    removeSourceDebugExtension = false,
                     stringGuardPackages = listOf(selector),
                 )
             }
@@ -70,7 +70,7 @@ class TransformSettingsTest {
     fun `explicit includes are validated against eligible classes`() {
         val settings = settings(
             enabled = true,
-            removeMetadata = false,
+            removeSourceDebugExtension = false,
             stringGuardPackages = listOf("sample.empty"),
         )
 
@@ -85,7 +85,7 @@ class TransformSettingsTest {
         val failure = assertFailsWith<IllegalArgumentException> {
             settings(
                 enabled = true,
-                removeMetadata = false,
+                removeSourceDebugExtension = false,
                 stringGuardPackages = listOf("missing.package"),
             ).analyzeClasses(listOf("sample/empty/NoLiteral"))
         }
@@ -106,7 +106,7 @@ class TransformSettingsTest {
                     matchedClasses = 2,
                     skippedClasses = 2,
                     unmatchedKeepStringPackages = listOf("sample/unused"),
-                    unmatchedKeepMetadataPackages = listOf("sample/metadata"),
+                    unmatchedKeepSourceDebugExtensions = listOf("sample/metadata"),
                 ),
                 stringCoverage =
                 StringCoverage(
@@ -118,12 +118,12 @@ class TransformSettingsTest {
                     ),
                     coverageUnknowns = 1,
                 ),
-                removedMetadata = 1,
+                removedSourceDebugExtensions = 1,
             )
 
         assertEquals(
             """
-            schemaVersion=1
+            schemaVersion=2
             enabled=true
             strictStringCoverage=true
             runtimeTarget=x86_64-unknown-linux-gnu
@@ -144,9 +144,9 @@ class TransformSettingsTest {
             skippedUnsupportedStringConcats=0
             skippedUnsupportedInvokeDynamics=0
             skippedUnsupportedFieldStrings=0
-            removedMetadata=1
+            removedSourceDebugExtensions=1
             unmatchedKeepStringPackages=sample/unused
-            unmatchedKeepMetadataPackages=sample/metadata
+            unmatchedKeepSourceDebugExtensions=sample/metadata
 
             """.trimIndent(),
             report.asPropertiesText(),
@@ -155,18 +155,18 @@ class TransformSettingsTest {
 
     private fun settings(
         enabled: Boolean,
-        removeMetadata: Boolean,
+        removeSourceDebugExtension: Boolean,
         stringGuardPackages: List<String> = emptyList(),
         keepStringPackages: List<String> = emptyList(),
-        removeMetadataPackages: List<String> = emptyList(),
-        keepMetadataPackages: List<String> = emptyList(),
+        removeSourceDebugExtensionPackages: List<String> = emptyList(),
+        keepSourceDebugExtensionPackages: List<String> = emptyList(),
     ): TransformSettings = TransformSettings(
         enabled = enabled,
         java9StringConcatEnabled = true,
-        removeMetadata = removeMetadata,
+        removeSourceDebugExtension = removeSourceDebugExtension,
         stringGuardPackages = stringGuardPackages,
         keepStringPackages = keepStringPackages,
-        removeMetadataPackages = removeMetadataPackages,
-        keepMetadataPackages = keepMetadataPackages,
+        removeSourceDebugExtensionPackages = removeSourceDebugExtensionPackages,
+        keepSourceDebugExtensionPackages = keepSourceDebugExtensionPackages,
     )
 }

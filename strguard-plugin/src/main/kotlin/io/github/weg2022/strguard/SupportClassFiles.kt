@@ -11,7 +11,7 @@ import java.nio.file.Path
 internal object SupportClassFiles {
     private val annotationNames = listOf(
         "io/github/weg2022/strguard/annotation/KeepString",
-        "io/github/weg2022/strguard/annotation/KeepMetadata",
+        "io/github/weg2022/strguard/annotation/KeepSourceDebugExtension",
     )
 
     fun writeAnnotations(destination: Path) {

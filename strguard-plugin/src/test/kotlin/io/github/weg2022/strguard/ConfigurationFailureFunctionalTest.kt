@@ -90,8 +90,8 @@ class ConfigurationFailureFunctionalTest {
             """
             releaseSeedHex.set("$CONFIGURATION_FAILURE_TEST_SEED")
             stringGuardPackages.set(listOf("sample.empty"))
-            removeMetadata.set(true)
-            removeMetadataPackages.set(listOf("sample.empty"))
+            removeSourceDebugExtension.set(true)
+            removeSourceDebugExtensionPackages.set(listOf("sample.empty"))
             """.trimIndent(),
         )
         writeFile(
@@ -115,7 +115,7 @@ class ConfigurationFailureFunctionalTest {
         assertEquals("1", summary.getProperty("matchedClasses"))
         assertEquals("1", summary.getProperty("skippedClasses"))
         assertEquals("0", summary.getProperty("protectedStrings"))
-        assertEquals("0", summary.getProperty("removedMetadata"))
+        assertEquals("0", summary.getProperty("removedSourceDebugExtensions"))
     }
 
     @Test
@@ -124,8 +124,8 @@ class ConfigurationFailureFunctionalTest {
             """
             releaseSeedHex.set("$CONFIGURATION_FAILURE_TEST_SEED")
             keepStringPackages.set(listOf("missing.keep"))
-            removeMetadata.set(true)
-            keepMetadataPackages.set(listOf("missing.metadata"))
+            removeSourceDebugExtension.set(true)
+            keepSourceDebugExtensionPackages.set(listOf("missing.metadata"))
             """.trimIndent(),
         )
 
@@ -138,7 +138,7 @@ class ConfigurationFailureFunctionalTest {
         )
         assertTrue(
             result.output.contains(
-                "keepMetadataPackages selector 'missing/metadata' did not match any eligible class",
+                "keepSourceDebugExtensionPackages selector 'missing/metadata' did not match any eligible class",
             ),
         )
         assertEquals(
@@ -147,7 +147,7 @@ class ConfigurationFailureFunctionalTest {
         )
         assertEquals(
             "missing/metadata",
-            readSummary().getProperty("unmatchedKeepMetadataPackages"),
+            readSummary().getProperty("unmatchedKeepSourceDebugExtensions"),
         )
     }
 

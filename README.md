@@ -17,7 +17,7 @@ StrGuard supports:
 * Android `armeabi-v7a`, `arm64-v8a`, `x86`, and `x86_64`
 * ProGuard/R8 verified artifacts and Compose Desktop release ProGuard integration
 * `LDC`, static final strings, Java 9+ `StringConcatFactory`, Kotlin string templates, and the same literals when used in arrays, collections, switches, lambdas, reflection calls, or other ordinary bytecode
-* Optional Kotlin metadata annotation removal
+* Optional removal of Kotlin SourceDebugExtension (SMAP) and `DebugMetadata` debug info; `kotlin.Metadata` is always retained
 * Android 15+ 16 KB ELF page alignment for the Native runtime
 * Native-side compile-time string obfuscation: protocol labels, error messages, and the JNI signature are XOR-encrypted at compile time and decoded only at runtime, so `strings`/`.rodata` scans find no plaintext
 * Debug symbols stripped from the Native runtime (no `.symtab`/`.debug_*`)
@@ -89,9 +89,9 @@ strGuard {
     strictStringCoverage.set(true)
     consoleOutput.set(false)
 
-    removeMetadata.set(false)
-    removeMetadataPackages.set(listOf("com.example.app"))
-    keepMetadataPackages.set(listOf("com.example.app.reflective"))
+    removeSourceDebugExtension.set(false)
+    removeSourceDebugExtensionPackages.set(listOf("com.example.app"))
+    keepSourceDebugExtensionPackages.set(listOf("com.example.app.reflective"))
 }
 ```
 
@@ -104,11 +104,11 @@ strGuard {
 | `java9StringConcatEnabled` | `true` | Protects supported Java 9+ concat recipe constants. |
 | `strictStringCoverage` | `false` | Writes complete aggregate coverage and fails after scanning when a selected class has an unsupported non-empty string location or unknown custom attribute. |
 | `consoleOutput` | `false` | Prints the schema-backed summary without literals or key material. |
-| `removeMetadata` | `false` | Removes eligible Kotlin metadata annotations. |
+| `removeSourceDebugExtension` | `false` | Removes eligible Kotlin SourceDebugExtension (SMAP) and `DebugMetadata` debug info. `kotlin.Metadata` is always retained. |
 | `stringGuardPackages` | Empty | Include prefixes; empty means all non-StrGuard application classes. |
 | `keepStringPackages` | Empty | String-protection exclusion prefixes. |
-| `removeMetadataPackages` | Empty | Metadata-removal include prefixes. |
-| `keepMetadataPackages` | Empty | Metadata-removal exclusion prefixes. |
+| `removeSourceDebugExtensionPackages` | Empty | Source-debug-extension removal include prefixes. |
+| `keepSourceDebugExtensionPackages` | Empty | Source-debug-extension removal exclusion prefixes. |
 
 Package entries accept dotted or slash-separated names and include descendants. Keep lists take precedence.
 
@@ -142,15 +142,19 @@ Android uses ABI-neutral transformed classes and vault data, then builds the con
 
 ## Excluding a class
 
-`KeepString` and `KeepMetadata` are available during Java and Kotlin compilation:
+`KeepString` and `KeepSourceDebugExtension` are available during Java and Kotlin compilation:
 
 ```kotlin
 import io.github.weg2022.strguard.annotation.KeepString
+import io.github.weg2022.strguard.annotation.KeepSourceDebugExtension
 
 @KeepString
 class DiagnosticStrings {
     fun value() = "This literal stays in the class file"
 }
+
+@KeepSourceDebugExtension
+class DebuggerFriendlyService
 ```
 
 ## Outputs and shrinkers
@@ -214,13 +218,15 @@ The raw release seed is not a task input or output and is not stored in cache en
 * The marker digest detects mismatches and binary tampering while the marker is trusted; it is not a signature or MAC. An attacker who can replace both the marker and binary on the classpath still controls application code and remains outside this threat model.
 * Static final strings and Kotlin `const val` lose `ConstantValue` and initialize in `<clinit>`. Do not use protected values as cross-module compile-time constants or annotation arguments.
 * Annotation strings, arbitrary `ConstantDynamic`, unsupported `invokedynamic`, empty strings, and strings over 30,000 UTF-16 code units remain unchanged. Enable strict coverage to make non-empty unsupported locations fail the build.
-* Metadata removal can break reflection, serialization, and compiler tooling.
+* `kotlin.Metadata` is always retained, so kotlin-reflect, serialization, and compiler tooling keep working. Removing SourceDebugExtension strips SMAP line mapping and debug annotations; IDE source-mapped stepping for transformed classes may degrade.
 
 Report vulnerabilities through GitHub private vulnerability reporting. Never post a release seed, key share, protected vault, credential, exploit detail, or private application code in a public issue.
 
 ## Reports and migration
 
-Each transform writes `build/reports/strguard/<target-or-variant>/summary.txt` as Java properties with `schemaVersion=1`. Stable fields include `enabled`, `strictStringCoverage`, `runtimeTarget`, class-selection counts, `stringCandidates`, `protectedStrings`, `skippedStrings`, `strictViolations`, `coverageUnknowns`, per-reason `skipped*` counts, `removedMetadata`, and unmatched keep selectors. `stringCandidates = protectedStrings + skippedStrings`; `strictViolations` also includes `coverageUnknowns`. Reports never contain literals, seeds, shares, call-site identities, or decoded values. Consumers must ignore unknown optional schema 1 fields.
+Each transform writes `build/reports/strguard/<target-or-variant>/summary.txt` as Java properties with `schemaVersion=2`. Stable fields include `enabled`, `strictStringCoverage`, `runtimeTarget`, class-selection counts, `stringCandidates`, `protectedStrings`, `skippedStrings`, `strictViolations`, `coverageUnknowns`, per-reason `skipped*` counts, `removedSourceDebugExtensions`, and unmatched keep selectors. `stringCandidates = protectedStrings + skippedStrings`; `strictViolations` also includes `coverageUnknowns`. Reports never contain literals, seeds, shares, call-site identities, or decoded values. Consumers must ignore unknown fields. Schema 1 consumers must migrate: `removedMetadata` became `removedSourceDebugExtensions`, `unmatchedKeepMetadataPackages` became `unmatchedKeepSourceDebugExtensions`, and removal counts now include stripped SMAP attributes.
+
+Version `3.0.0` renames the metadata-removal API and changes its behavior. `kotlin.Metadata` is never removed. Rename: `removeMetadata` → `removeSourceDebugExtension`, `removeMetadataPackages` → `removeSourceDebugExtensionPackages`, `keepMetadataPackages` → `keepSourceDebugExtensionPackages`, `@KeepMetadata` → `@KeepSourceDebugExtension`. Report schema became `schemaVersion=2` with the renamed fields above. Old configuration names are rejected; clean every protected module.
 
 Version `2.0.0` changes the vault, Native runtime, task graph, and shrinker contract. Clean every protected module. Vault v2 is rejected. Delete module `build/` directories when changing the seed, target, plugin, or Native toolchain. Never combine 1.x or pre-GA 2.0 classes with another generated Native library.
 

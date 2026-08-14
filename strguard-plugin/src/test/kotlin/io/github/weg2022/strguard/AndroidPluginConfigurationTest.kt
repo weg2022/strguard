@@ -190,7 +190,7 @@ class AndroidPluginConfigurationTest {
         assertEquals(TaskOutcome.SUCCESS, result.task(":assembleDebug")?.outcome)
         assertEquals(TaskOutcome.SUCCESS, result.task(":verifyDisabledStrGuardProviders")?.outcome)
         val report = Files.readString(projectDirectory.resolve("build/reports/strguard/debug/summary.txt"))
-        assertTrue(report.contains("schemaVersion=1"))
+        assertTrue(report.contains("schemaVersion=2"))
         assertTrue(report.contains("enabled=false"))
         assertTrue(report.contains("runtimeTarget=disabled"))
         assertFalse(report.contains("disabled Android seed Provider was evaluated"))

@@ -8,7 +8,7 @@ import org.gradle.api.provider.SetProperty
 import javax.inject.Inject
 
 abstract class StrGuardExtension @Inject constructor(objects: ObjectFactory) {
-    /** Disables all StrGuard class rewriting, metadata removal, and Native runtime generation. */
+    /** Disables all StrGuard class rewriting, source debug extension removal, and Native runtime generation. */
     val enabled: Property<Boolean> = objects.property(Boolean::class.java).convention(true)
 
     /** 256-bit release seed encoded as exactly 64 hexadecimal characters. */
@@ -29,7 +29,12 @@ abstract class StrGuardExtension @Inject constructor(objects: ObjectFactory) {
 
     val consoleOutput: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
 
-    val removeMetadata: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
+    /**
+     * Removes Kotlin SourceDebugExtension (SMAP attribute and annotation) and DebugMetadata
+     * from eligible classes. kotlin.Metadata is always retained so kotlin-reflect and
+     * serialization keep working.
+     */
+    val removeSourceDebugExtension: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
 
     /** Empty means every non-StrGuard application package is eligible. Entries use legal package segments. */
     val stringGuardPackages: ListProperty<String> =
@@ -39,12 +44,12 @@ abstract class StrGuardExtension @Inject constructor(objects: ObjectFactory) {
     val keepStringPackages: ListProperty<String> =
         objects.listProperty(String::class.java).convention(emptyList())
 
-    /** Empty means metadata is removed from every eligible class when enabled. Entries use legal package segments. */
-    val removeMetadataPackages: ListProperty<String> =
+    /** Empty means source debug extensions are removed from every eligible class when enabled. Entries use legal package segments. */
+    val removeSourceDebugExtensionPackages: ListProperty<String> =
         objects.listProperty(String::class.java).convention(emptyList())
 
-    /** Package selectors excluded from metadata removal. Entries use legal package segments. */
-    val keepMetadataPackages: ListProperty<String> =
+    /** Package selectors excluded from source debug extension removal. Entries use legal package segments. */
+    val keepSourceDebugExtensionPackages: ListProperty<String> =
         objects.listProperty(String::class.java).convention(emptyList())
 }
 

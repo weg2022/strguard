@@ -15,7 +15,7 @@ StrGuard 提供的是提高静态提取成本的 authenticated obfuscation，不
 * Android `armeabi-v7a`、`arm64-v8a`、`x86`、`x86_64`
 * ProGuard/R8 verified artifact与 Compose Desktop release ProGuard集成
 * `LDC`、static final 字符串、Java 9+ `StringConcatFactory`、Kotlin 字符串模板，以及数组、集合、switch/when、lambda、reflection call 等普通 bytecode 中的同类字面量
-* 可选 Kotlin metadata annotation移除
+* 可选移除 Kotlin SourceDebugExtension(SMAP) 与 `DebugMetadata` 调试信息；`kotlin.Metadata` 始终保留
 * Native 运行时对齐 Android 15+ 的 16 KB ELF page size
 * Native 侧编译期字符串混淆：协议 label、错误消息与 JNI 签名在编译期 XOR 加密、运行时才解码，`strings`/`.rodata` 扫描找不到明文
 * Native 运行时已剥离调试符号（无 `.symtab`/`.debug_*`）
@@ -87,9 +87,9 @@ strGuard {
     strictStringCoverage.set(true)
     consoleOutput.set(false)
 
-    removeMetadata.set(false)
-    removeMetadataPackages.set(listOf("com.example.app"))
-    keepMetadataPackages.set(listOf("com.example.app.reflective"))
+    removeSourceDebugExtension.set(false)
+    removeSourceDebugExtensionPackages.set(listOf("com.example.app"))
+    keepSourceDebugExtensionPackages.set(listOf("com.example.app.reflective"))
 }
 ```
 
@@ -102,11 +102,11 @@ strGuard {
 | `java9StringConcatEnabled` | `true` | 保护受支持的 Java 9+ concat recipe常量。 |
 | `strictStringCoverage` | `false` | 写入完整聚合 coverage；扫描结束后，如选定 class 中仍有不支持的非空字符串位置或未知 custom attribute，则构建失败。 |
 | `consoleOutput` | `false` | 输出 schema化 summary，不输出字面量或 key material。 |
-| `removeMetadata` | `false` | 移除符合条件的 Kotlin metadata annotation。 |
+| `removeSourceDebugExtension` | `false` | 移除符合条件的 Kotlin SourceDebugExtension(SMAP) 与 `DebugMetadata` 调试信息。`kotlin.Metadata` 始终保留。 |
 | `stringGuardPackages` | 空 | include前缀；空表示全部非 StrGuard 应用 class。 |
 | `keepStringPackages` | 空 | 字符串保护排除前缀。 |
-| `removeMetadataPackages` | 空 | metadata移除 include前缀。 |
-| `keepMetadataPackages` | 空 | metadata移除排除前缀。 |
+| `removeSourceDebugExtensionPackages` | 空 | 源码调试扩展移除 include前缀。 |
+| `keepSourceDebugExtensionPackages` | 空 | 源码调试扩展移除排除前缀。 |
 
 package可用点分或 slash分隔并包含子 package；keep列表优先。
 
@@ -140,15 +140,19 @@ Android使用 ABI-neutral transformed classes与 vault，再构建对应 Rust ta
 
 ## 排除 class
 
-插件会向 Java/Kotlin编译提供 `KeepString` 与 `KeepMetadata`：
+插件会向 Java/Kotlin编译提供 `KeepString` 与 `KeepSourceDebugExtension`：
 
 ```kotlin
 import io.github.weg2022.strguard.annotation.KeepString
+import io.github.weg2022.strguard.annotation.KeepSourceDebugExtension
 
 @KeepString
 class DiagnosticStrings {
     fun value() = "这个字面量保留在 class 文件中"
 }
+
+@KeepSourceDebugExtension
+class DebuggerFriendlyService
 ```
 
 ## 输出与 shrinker
@@ -212,13 +216,15 @@ Raw release seed 不是 task input 或 output，也不会写入 cache entry。�
 * marker digest 能在 marker 可信时发现 binary 错配与篡改，但它不是 signature 或 MAC。能够同时替换 classpath marker 和 binary 的攻击者也已能控制应用代码，不在此 threat model 内。
 * Java static final字符串与 Kotlin `const val`会失去 `ConstantValue`并在 `<clinit>`初始化，不要作为跨模块编译期常量或 annotation参数。
 * annotation 字符串、任意 `ConstantDynamic`、不支持的 `invokedynamic`、空字符串和超过 30,000 个 UTF-16 code unit 的字符串保持不变。启用 strict coverage 后，非空 unsupported location 会让构建失败。
-* metadata移除可能破坏 reflection、serialization和 compiler tooling。
+* `kotlin.Metadata` 始终保留，kotlin-reflect、serialization 与 compiler tooling 不受影响。移除 SourceDebugExtension 会剥离 SMAP 行号映射与调试注解；转换后 class 的 IDE 源码级 step 可能退化。
 
 安全漏洞请使用 GitHub private vulnerability reporting。不要在公开 Issue中提交 seed、key share、vault、Credential、exploit细节或私有应用代码。
 
 ## Report与迁移
 
-每次 transform 都会写入 `build/reports/strguard/<target-or-variant>/summary.txt`，格式为 Java properties，`schemaVersion=1`。稳定字段包括 `enabled`、`strictStringCoverage`、`runtimeTarget`、class selection count、`stringCandidates`、`protectedStrings`、`skippedStrings`、`strictViolations`、`coverageUnknowns`、各原因的 `skipped*` count、`removedMetadata` 与 unmatched keep selector。满足 `stringCandidates = protectedStrings + skippedStrings`，且 `strictViolations` 还包含 `coverageUnknowns`。报告不包含 literal、seed、share、call-site identity 或 decoded value；consumer 必须忽略未知的 schema 1 可选字段。
+每次 transform 都会写入 `build/reports/strguard/<target-or-variant>/summary.txt`，格式为 Java properties，`schemaVersion=2`。稳定字段包括 `enabled`、`strictStringCoverage`、`runtimeTarget`、class selection count、`stringCandidates`、`protectedStrings`、`skippedStrings`、`strictViolations`、`coverageUnknowns`、各原因的 `skipped*` count、`removedSourceDebugExtensions` 与 unmatched keep selector。满足 `stringCandidates = protectedStrings + skippedStrings`，且 `strictViolations` 还包含 `coverageUnknowns`。报告不包含 literal、seed、share、call-site identity 或 decoded value；consumer 必须忽略未知字段。schema 1 的 consumer 需要迁移：`removedMetadata` 变为 `removedSourceDebugExtensions`，`unmatchedKeepMetadataPackages` 变为 `unmatchedKeepSourceDebugExtensions`，且移除计数现在包含被剥离的 SMAP 属性。
+
+版本 `3.0.0` 重命名 metadata 移除 API 并改变其行为：`kotlin.Metadata` 永不移除。改名映射：`removeMetadata` → `removeSourceDebugExtension`、`removeMetadataPackages` → `removeSourceDebugExtensionPackages`、`keepMetadataPackages` → `keepSourceDebugExtensionPackages`、`@KeepMetadata` → `@KeepSourceDebugExtension`。报告 schema 升级为 `schemaVersion=2` 并包含上述新字段。旧配置名会被拒绝；所有受保护模块都必须 clean。
 
 版本 `2.0.0` 修改了 vault、Native runtime、task graph 与 shrinker 契约。所有受保护模块都必须 clean。当前 runtime 拒绝 vault v2。更改 seed、target、plugin 或 Native toolchain时应删除模块 `build/`。不要混用 1.x 或 pre-GA 2.0 class 与另一份 Native library。
 

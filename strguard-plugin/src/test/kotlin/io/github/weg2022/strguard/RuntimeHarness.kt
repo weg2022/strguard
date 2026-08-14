@@ -47,11 +47,11 @@ internal class RuntimeHarness(
         enabled = true,
         java9StringConcatEnabled = true,
         strictStringCoverage = true,
-        removeMetadata = false,
+        removeSourceDebugExtension = false,
         stringGuardPackages = listOf("sample"),
         keepStringPackages = emptyList(),
-        removeMetadataPackages = emptyList(),
-        keepMetadataPackages = emptyList(),
+        removeSourceDebugExtensionPackages = emptyList(),
+        keepSourceDebugExtensionPackages = emptyList(),
     )
 
     private fun stubBridgeBytes(bridge: BridgeModel, records: List<ProtectedRecord>): ByteArray {
