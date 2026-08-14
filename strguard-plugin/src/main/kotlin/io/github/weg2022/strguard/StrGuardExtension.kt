@@ -70,6 +70,10 @@ abstract class StrGuardExtension @Inject constructor(objects: ObjectFactory) {
     /** 空表示所有 eligible class 都注入标记。Entries use legal package segments. */
     val aiPolicyPackages: ListProperty<String> =
         objects.listProperty(String::class.java).convention(emptyList())
+
+    /** 策略标记注入排除前缀,优先于 include。Entries use legal package segments. */
+    val aiPolicyExcludePackages: ListProperty<String> =
+        objects.listProperty(String::class.java).convention(emptyList())
 }
 
 internal fun ListProperty<String>.normalizedPackageSelectors(propertyName: String): Provider<List<String>> = map { selectors -> normalizePackageSelectors(propertyName, selectors) }

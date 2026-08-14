@@ -91,6 +91,9 @@ abstract class TransformAndroidClassesTask : DefaultTask() {
     @get:Input
     abstract val aiPolicyPackages: ListProperty<String>
 
+    @get:Input
+    abstract val aiPolicyExcludePackages: ListProperty<String>
+
     /** 声明者坐标(group:artifact:version),配置期编码后传入,执行期不得访问 project。 */
     @get:Input
     abstract val moduleCoordinates: Property<String>
@@ -111,6 +114,7 @@ abstract class TransformAndroidClassesTask : DefaultTask() {
                 aiPolicyContact = aiPolicyContact.orNull,
                 aiPolicyExceptions = aiPolicyExceptions.get(),
                 aiPolicyPackages = aiPolicyPackages.get(),
+                aiPolicyExcludePackages = aiPolicyExcludePackages.get(),
                 moduleCoordinates = decodeModuleCoordinates(moduleCoordinates.get())
                     .takeIf { coordinates -> coordinates.artifact.isNotEmpty() },
             )
@@ -209,7 +213,7 @@ abstract class TransformAndroidClassesTask : DefaultTask() {
                     removedSourceDebugExtensions = removedSourceDebugExtensions.size,
                 )
             handleCoverage(settings, stringCoverage, reports, reportsOutput, report)
-            addSupportClasses(outputEntries, builder, settings.aiPolicyEnabled)
+            addSupportClasses(outputEntries, builder, settings)
             builder.writeNativeInputs(nativeInputs).close()
             writeOutputJar(outputEntries, stagedOutput)
             writeReport(reports, report)
@@ -306,13 +310,19 @@ abstract class TransformAndroidClassesTask : DefaultTask() {
     private fun addSupportClasses(
         entries: MutableMap<String, ByteArray>,
         vaultBuilder: SecureVaultBuilder,
-        aiPolicyEnabled: Boolean,
+        settings: TransformSettings,
     ) {
         val supportDirectory = temporaryDir.toPath().resolve("support-classes")
         resetDirectory(supportDirectory)
         SupportClassFiles.writeRuntime(supportDirectory, vaultBuilder.bridge)
-        if (aiPolicyEnabled) {
+        if (settings.aiPolicyEnabled) {
             SupportClassFiles.writePolicyAnnotation(supportDirectory)
+            SupportClassFiles.writePolicyMetaFiles(
+                supportDirectory,
+                settings.moduleCoordinates,
+                settings.aiPolicyContact,
+                settings.aiPolicyExceptions,
+            )
         }
         Files.walk(supportDirectory).use { paths ->
             paths.filter(Files::isRegularFile).forEach { source ->

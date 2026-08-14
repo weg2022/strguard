@@ -13,6 +13,7 @@ internal class TransformSettings(
     val aiPolicyContact: String? = null,
     aiPolicyExceptions: List<String> = emptyList(),
     aiPolicyPackages: List<String> = emptyList(),
+    aiPolicyExcludePackages: List<String> = emptyList(),
     val moduleCoordinates: ModuleCoordinates? = null,
 ) {
     val stringGuardPackages: List<String> =
@@ -27,15 +28,19 @@ internal class TransformSettings(
         aiPolicyExceptions.map(String::trim).filter(String::isNotEmpty)
     val aiPolicyPackages: List<String> =
         normalizePackageSelectors("aiPolicyPackages", aiPolicyPackages)
+    val aiPolicyExcludePackages: List<String> =
+        normalizePackageSelectors("aiPolicyExcludePackages", aiPolicyExcludePackages)
 
     /**
      * AI 逆向禁止策略标记与字符串保护、debug 信息移除完全正交:即使字符串保护未选中
      * 某类,只要该类符合 aiPolicy 选择,也必须进入变换管线以写入 marker(见
-     * TransformClassesTask 的 shouldTransformClass 门控)。
+     * TransformClassesTask 的 shouldTransformClass 门控)。include 空 = 全部 eligible
+     * class;exclude 优先。
      */
     fun shouldApplyAiPolicy(internalClassName: String): Boolean = aiPolicyEnabled &&
         isEligibleClass(internalClassName) &&
-        matchesIncludedPackages(internalClassName, aiPolicyPackages)
+        matchesIncludedPackages(internalClassName, aiPolicyPackages) &&
+        !matchesAnyPackage(internalClassName, aiPolicyExcludePackages)
 
     fun shouldTransformClass(internalClassName: String): Boolean = shouldTransformStrings(internalClassName) ||
         shouldRemoveSourceDebugExtension(internalClassName) ||
@@ -76,6 +81,7 @@ internal class TransformSettings(
         }
         if (aiPolicyEnabled) {
             validateExplicitIncludes("aiPolicyPackages", aiPolicyPackages, eligibleClassNames)
+            validateExplicitIncludes("aiPolicyExcludePackages", aiPolicyExcludePackages, eligibleClassNames)
         }
         val matchedClasses = eligibleClassNames.count(::shouldTransformClass)
         return ClassSelectionSummary(

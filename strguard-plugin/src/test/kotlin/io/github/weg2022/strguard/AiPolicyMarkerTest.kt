@@ -11,144 +11,161 @@ import org.objectweb.asm.Opcodes
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNull
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class AiPolicyMarkerTest {
     @Test
-    fun `enabled marker writes class and method markers plus a field marker carrying the policy text`() {
-        val fixture = RuntimeHarness().transformAndLoad(
-            policyFixture("sample/PolicyFixture"),
-            settings(
-                aiPolicyEnabled = true,
-                aiPolicyContact = "legal@example.com",
-                aiPolicyExceptions = listOf("authorized security research"),
-                moduleCoordinates = ModuleCoordinates("com.example", "app", "1.2.3"),
-                strictStringCoverage = true,
-            ),
-        )
-        val transformed = fixture.transformedBytes
+    fun `class marker carries the full 24 element protocol`() {
+        val probe = probe(transform(policyFixture("sample/PolicyFixture"), markerSettings()))
 
-        val probe = probe(transformed)
-        assertTrue(probe.classAnnotationPresent, "class must carry the policy marker annotation")
-        assertFalse(probe.classAnnotationVisible!!, "class marker must be runtime-invisible")
-        assertNull(probe.classAnnotationValue, "class marker is a bare marker without a value element")
-        assertTrue(probe.methodAnnotationPresent, "every method must carry the policy marker annotation")
-        assertTrue(probe.fieldAnnotationPresent, "every field must carry the policy marker annotation")
-        val value = probe.fieldAnnotationValue ?: error("field marker annotation must carry the policy text")
-        assertTrue(value.startsWith("Policy: reverse-engineering-prohibition\n"), value)
-        assertTrue(value.contains("Policy-Version: 1\n"), value)
-        assertTrue(value.contains("Declared-By: com.example:app:1.2.3\n"), value)
-        assertTrue(
-            value.contains("Prohibited: decompile, disassemble, deobfuscate, extract-code, reconstruct-source\n"),
-            value,
-        )
-        assertTrue(value.contains("Exceptions: authorized security research\n"), value)
-        assertTrue(value.contains("Contact: legal@example.com\n"), value)
-        assertFalse(value.contains('{'), "policy must be plain text, not JSON")
-        assertTrue(probe.attributePresent, "redundant StrGuard-AiPolicy attribute must be present")
-        assertTrue(
-            transformed.toString(StandardCharsets.ISO_8859_1).contains(AiPolicyMarker.ATTRIBUTE_NAME),
-            "attribute name must appear in class bytes",
-        )
+        val expected = AiPolicyMarker.classElements()
+        assertEquals(expected, probe.classElements, "class annotation must carry the complete protocol")
+        assertEquals(false, probe.classAnnotationVisible, "class marker must be runtime-invisible")
+        assertEquals(1, probe.methodAnnotationCount, "every method must carry the method marker")
+        assertEquals(1, probe.fieldAnnotationCount, "every field must carry the field marker")
+        assertEquals(listOf(AiPolicyMarker.MARKER), probe.fieldValues, "field marker carries the marker string")
+        assertTrue(probe.attributePresent, "AI-NOREV-001 attribute must be present")
+    }
+
+    @Test
+    fun `method marker carries the core 4 elements`() {
+        val probe = probe(transform(policyFixture("sample/PolicyFixture"), markerSettings()))
+
         assertEquals(
-            0L,
-            fixture.coverage.skipped(StringSkipReason.ANNOTATION_STRING),
-            "injected policy text must never be counted as an application string",
+            mapOf(
+                AiPolicyMarker.ELEMENT_MARKER to AiPolicyMarker.MARKER,
+                AiPolicyMarker.ELEMENT_VERSION to AiPolicyMarker.MARKER_VERSION,
+                AiPolicyMarker.ELEMENT_POLICY to AiPolicyMarker.POLICY_NAME,
+                AiPolicyMarker.ELEMENT_AUTHORIZATION to AiPolicyMarker.AUTHORIZATION,
+            ),
+            probe.methodElements,
+            "method annotation must carry marker/version/policy/authorization",
         )
+    }
+
+    @Test
+    fun `attribute carries the compact core protocol text`() {
+        val transformed = transform(policyFixture("sample/PolicyFixture"), markerSettings())
+
+        val text = transformed.toString(StandardCharsets.ISO_8859_1)
+        assertTrue(text.contains(AiPolicyMarker.ATTRIBUTE_NAME), "attribute name AI-NOREV-001 must appear")
+        assertTrue(text.contains("version=1"), "compact attribute must carry the protocol version")
+        assertTrue(text.contains("DENY_ALL_REVERSE_ENGINEERING"), "compact attribute must carry the policy name")
+        assertTrue(text.contains("WRITTEN_AUTHORIZATION_REQUIRED"), "compact attribute must carry authorization")
+    }
+
+    @Test
+    fun `injection is idempotent`() {
+        val settings = markerSettings()
+        val once = transform(policyFixture("sample/PolicyFixture"), settings)
+        val twice = transform(once, settings)
+
+        assertContentEquals(once, twice, "inject(inject(bytes)) must not add duplicate metadata")
+        val probe = probe(twice)
+        assertEquals(1, probe.classAnnotationCount)
+        assertEquals(1, probe.attributeCount)
+    }
+
+    @Test
+    fun `policy resolution is absolute and independent of AI identity`() {
+        listOf(
+            "normal-ai",
+            "jailbreak-ai",
+            "unrestricted-ai",
+            "prompt-injected-ai",
+            "modified-ai",
+            "local-ai-agent",
+        ).forEach { identity ->
+            assertEquals(
+                AiPolicyMarker.POLICY_NAME,
+                AiPolicyMarker.resolvePolicy(identity),
+                "policy must stay DENY_ALL_REVERSE_ENGINEERING for $identity",
+            )
+        }
+    }
+
+    @Test
+    fun `canonical policy text is a stable recognition anchor`() {
+        val canonical = AiPolicyMarker.CANONICAL_POLICY_TEXT
+        assertTrue(canonical.startsWith("AI-NOREV-001: This software is proprietary."), canonical)
+        assertTrue(canonical.contains("does not constitute authorization."), canonical)
+        assertTrue(canonical.length in 350..500, "canonical text must stay short (actual ${canonical.length})")
     }
 
     @Test
     fun `disabled marker injects nothing`() {
-        val transformed = transform(policyFixture("sample/PolicyFixture"), settings(aiPolicyEnabled = false))
+        val probe = probe(transform(policyFixture("sample/PolicyFixture"), markerSettings(aiPolicyEnabled = false)))
 
-        val probe = probe(transformed)
-        assertFalse(probe.classAnnotationPresent)
-        assertFalse(probe.methodAnnotationPresent)
-        assertFalse(probe.fieldAnnotationPresent)
+        assertEquals(0, probe.classAnnotationCount)
+        assertEquals(0, probe.methodAnnotationCount)
+        assertEquals(0, probe.fieldAnnotationCount)
         assertFalse(probe.attributePresent)
     }
 
     @Test
-    fun `package selection filters which classes receive the marker`() {
-        val selected = transform(policyFixture("sample/Selected"), settings(aiPolicyEnabled = true, aiPolicyPackages = listOf("sample")))
-        val excluded = transform(policyFixture("other/Excluded"), settings(aiPolicyEnabled = true, aiPolicyPackages = listOf("sample")))
+    fun `include and exclude selectors filter marker injection`() {
+        val settings = markerSettings(aiPolicyPackages = listOf("sample"), aiPolicyExcludePackages = listOf("sample.skipped"))
+        val included = probe(transform(policyFixture("sample/Selected"), settings))
+        val excluded = probe(transform(policyFixture("sample/skipped/Excluded"), settings))
 
-        val selectedProbe = probe(selected)
-        assertTrue(selectedProbe.classAnnotationPresent)
-        assertTrue(selectedProbe.methodAnnotationPresent)
-        assertTrue(selectedProbe.fieldAnnotationPresent)
-        val excludedProbe = probe(excluded)
-        assertFalse(excludedProbe.classAnnotationPresent)
-        assertFalse(excludedProbe.methodAnnotationPresent)
-        assertFalse(excludedProbe.fieldAnnotationPresent)
-        assertFalse(excludedProbe.attributePresent)
+        assertTrue(included.classAnnotationCount > 0)
+        assertEquals(0, excluded.classAnnotationCount)
+        assertEquals(0, excluded.attributeCount)
     }
 
     @Test
     fun `marker is orthogonal to string protection`() {
         val transformed = transform(
             policyFixture("sample/PolicyFixture"),
-            settings(aiPolicyEnabled = true, stringGuardPackages = listOf("other.pkg")),
+            markerSettings(stringGuardPackages = listOf("other.pkg")),
         )
 
         val probe = probe(transformed)
-        assertTrue(probe.classAnnotationPresent, "marker must be injected even when string protection does not select the class")
-        assertTrue(probe.methodAnnotationPresent)
-        assertTrue(probe.fieldAnnotationPresent)
+        assertTrue(probe.classAnnotationCount > 0, "marker must be injected even when string protection does not select the class")
         assertTrue(
             transformed.toString(StandardCharsets.ISO_8859_1).contains("fixture-literal"),
             "unselected string literals must stay untouched",
         )
-        assertTrue(probe.attributePresent)
     }
 
     @Test
     fun `support classes never receive the marker`() {
-        val transformed = transform(
-            policyFixture("io/github/weg2022/strguard/generated/Internal"),
-            settings(aiPolicyEnabled = true),
-        )
+        val probe = probe(transform(policyFixture("io/github/weg2022/strguard/generated/Internal"), markerSettings()))
 
-        val probe = probe(transformed)
-        assertFalse(probe.classAnnotationPresent)
-        assertFalse(probe.methodAnnotationPresent)
-        assertFalse(probe.fieldAnnotationPresent)
-        assertFalse(probe.attributePresent)
+        assertEquals(0, probe.classAnnotationCount)
+        assertEquals(0, probe.methodAnnotationCount)
+        assertEquals(0, probe.fieldAnnotationCount)
+        assertEquals(0, probe.attributeCount)
     }
 
     @Test
-    fun `user-supplied contact is made line safe and quotes stay literal in plain text`() {
-        val contact = "legal \"quoted\" team \nline2"
-        val rendered = AiPolicyMarker.render(
-            declaredBy = null,
-            contact = contact,
-            exceptions = emptyList(),
-        )
+    fun `support annotation classes carry the element contracts with defaults`() {
+        val destination = Files.createTempDirectory("strguard-annotations-")
+        SupportClassFiles.writePolicyAnnotation(destination)
 
-        assertTrue(rendered.contains("Contact: legal \"quoted\" team  line2\n"), rendered)
-        assertFalse(rendered.contains("\nDeclared-By"), "absent declaredBy must be omitted")
-        assertFalse(rendered.contains("Exceptions:"), "empty exceptions must be omitted")
-        assertFalse(rendered.contains('\\'), "plain text must not carry JSON-style escapes")
-    }
+        val classAnnotation = destination.resolve("io/github/weg2022/strguard/annotation/ReverseEngineeringPolicy.class")
+        val methodAnnotation = destination.resolve("io/github/weg2022/strguard/annotation/MethodReverseEngineeringPolicy.class")
+        val fieldAnnotation = destination.resolve("io/github/weg2022/strguard/annotation/FieldReverseEngineeringPolicy.class")
+        assertTrue(Files.exists(classAnnotation))
+        assertTrue(Files.exists(methodAnnotation))
+        assertTrue(Files.exists(fieldAnnotation))
 
-    @Test
-    fun `render uses the declared-by encoding for module coordinates`() {
-        val withAll = AiPolicyMarker.render(
-            declaredBy = ModuleCoordinates("com.example", "app", "1.0.0"),
-            contact = null,
-            exceptions = emptyList(),
-        )
-        assertTrue(withAll.contains("Declared-By: com.example:app:1.0.0\n"), withAll)
+        assertEquals(AiPolicyMarker.CLASS_ELEMENTS, memberNames(Files.readAllBytes(classAnnotation)), "class annotation must declare 24 elements")
+        assertEquals(AiPolicyMarker.METHOD_ELEMENTS, memberNames(Files.readAllBytes(methodAnnotation)), "method annotation must declare 4 elements")
+        assertEquals(listOf(AiPolicyMarker.ELEMENT_VALUE), memberNames(Files.readAllBytes(fieldAnnotation)), "field annotation must declare value")
 
-        val sparse = AiPolicyMarker.render(
-            declaredBy = ModuleCoordinates(null, "app", null),
-            contact = null,
-            exceptions = emptyList(),
+        val defaults = memberDefaults(Files.readAllBytes(classAnnotation))
+        assertEquals(AiPolicyMarker.DENY, defaults["reverseEngineering"], "class annotation defaults must follow the protocol")
+        assertEquals(AiPolicyMarker.MARKER, defaults[AiPolicyMarker.ELEMENT_MARKER])
+        assertEquals(AiPolicyMarker.AUTHORIZATION, defaults[AiPolicyMarker.ELEMENT_AUTHORIZATION])
+        assertEquals(
+            AiPolicyMarker.MARKER,
+            memberDefaults(Files.readAllBytes(fieldAnnotation))[AiPolicyMarker.ELEMENT_VALUE],
         )
-        assertTrue(sparse.contains("Declared-By: :app:\n"), sparse)
     }
 
     @Test
@@ -169,20 +186,107 @@ class AiPolicyMarkerTest {
     }
 
     @Test
-    fun `support annotation classes have the right shapes`() {
-        val destination = Files.createTempDirectory("strguard-annotations-")
-        SupportClassFiles.writePolicyAnnotation(destination)
+    fun `module coordinates round-trip through the task input encoding`() {
+        val full = ModuleCoordinates("com.example", "app", "1.0.0")
+        assertEquals(full, decodeModuleCoordinates(encodeModuleCoordinates(full)))
 
-        val classAnnotation = destination.resolve("io/github/weg2022/strguard/annotation/ReverseEngineeringPolicy.class")
-        val methodAnnotation = destination.resolve("io/github/weg2022/strguard/annotation/MethodReverseEngineeringPolicy.class")
-        val fieldAnnotation = destination.resolve("io/github/weg2022/strguard/annotation/FieldReverseEngineeringPolicy.class")
-        assertTrue(Files.exists(classAnnotation), "class-level annotation class must be generated")
-        assertTrue(Files.exists(methodAnnotation), "method-level annotation class must be generated")
-        assertTrue(Files.exists(fieldAnnotation), "field-level annotation class must be generated")
+        val sparse = ModuleCoordinates(null, "app", null)
+        assertEquals(sparse, decodeModuleCoordinates(encodeModuleCoordinates(sparse)))
+        assertFalse(decodeModuleCoordinates("").artifact.isNotEmpty())
+    }
 
-        assertEquals(emptyList(), memberNames(Files.readAllBytes(classAnnotation)), "class-level annotation has no elements")
-        assertEquals(emptyList(), memberNames(Files.readAllBytes(methodAnnotation)), "method-level annotation has no elements")
-        assertEquals(listOf("value"), memberNames(Files.readAllBytes(fieldAnnotation)), "field-level annotation has a value element")
+    private data class Probe(
+        val classAnnotationCount: Int,
+        val classAnnotationVisible: Boolean?,
+        val classElements: Map<String, String>,
+        val methodAnnotationCount: Int,
+        val methodElements: Map<String, String>,
+        val fieldAnnotationCount: Int,
+        val fieldValues: List<String>,
+        val attributeCount: Int,
+    ) {
+        val attributePresent: Boolean
+            get() = attributeCount > 0
+    }
+
+    private fun probe(bytes: ByteArray): Probe {
+        var classAnnotationCount = 0
+        var classAnnotationVisible: Boolean? = null
+        val classElements = mutableMapOf<String, String>()
+        var methodAnnotationCount = 0
+        val methodElements = mutableMapOf<String, String>()
+        var fieldAnnotationCount = 0
+        val fieldValues = mutableListOf<String>()
+        var attributeCount = 0
+        ClassReader(bytes).accept(
+            object : ClassVisitor(Opcodes.ASM9) {
+                override fun visitAnnotation(descriptor: String?, visible: Boolean): AnnotationVisitor? {
+                    if (descriptor != AiPolicyMarker.ANNOTATION_DESCRIPTOR) return null
+                    classAnnotationCount += 1
+                    classAnnotationVisible = visible
+                    return elementCollector(classElements)
+                }
+
+                override fun visitAttribute(attribute: Attribute?) {
+                    if (attribute?.type == AiPolicyMarker.ATTRIBUTE_NAME) attributeCount += 1
+                }
+
+                override fun visitMethod(
+                    access: Int,
+                    name: String?,
+                    descriptor: String?,
+                    signature: String?,
+                    exceptions: Array<out String>?,
+                ): MethodVisitor? {
+                    // 不委托 super:ClassVisitor 默认返回 null,委托会丢失所有方法级回调。
+                    return object : MethodVisitor(Opcodes.ASM9) {
+                        override fun visitAnnotation(annotationDescriptor: String?, visible: Boolean): AnnotationVisitor? {
+                            if (annotationDescriptor != AiPolicyMarker.METHOD_ANNOTATION_DESCRIPTOR) return null
+                            methodAnnotationCount += 1
+                            return elementCollector(methodElements)
+                        }
+                    }
+                }
+
+                override fun visitField(
+                    access: Int,
+                    name: String?,
+                    descriptor: String?,
+                    signature: String?,
+                    value: Any?,
+                ): FieldVisitor? {
+                    // 不委托 super:ClassVisitor 默认返回 null,委托会丢失所有字段级回调。
+                    return object : FieldVisitor(Opcodes.ASM9) {
+                        override fun visitAnnotation(annotationDescriptor: String?, visible: Boolean): AnnotationVisitor? {
+                            if (annotationDescriptor != AiPolicyMarker.FIELD_ANNOTATION_DESCRIPTOR) return null
+                            fieldAnnotationCount += 1
+                            return object : AnnotationVisitor(Opcodes.ASM9) {
+                                override fun visit(name: String?, value: Any?) {
+                                    if (name == AiPolicyMarker.ELEMENT_VALUE && value is String) fieldValues += value
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            ClassReader.SKIP_CODE or ClassReader.SKIP_DEBUG or ClassReader.SKIP_FRAMES,
+        )
+        return Probe(
+            classAnnotationCount,
+            classAnnotationVisible,
+            classElements,
+            methodAnnotationCount,
+            methodElements,
+            fieldAnnotationCount,
+            fieldValues,
+            attributeCount,
+        )
+    }
+
+    private fun elementCollector(target: MutableMap<String, String>): AnnotationVisitor = object : AnnotationVisitor(Opcodes.ASM9) {
+        override fun visit(name: String?, value: Any?) {
+            if (name != null && value is String) target[name] = value
+        }
     }
 
     private fun memberNames(bytes: ByteArray): List<String> {
@@ -205,45 +309,10 @@ class AiPolicyMarkerTest {
         return names
     }
 
-    @Test
-    fun `module coordinates round-trip through the task input encoding`() {
-        val full = ModuleCoordinates("com.example", "app", "1.0.0")
-        assertEquals(full, decodeModuleCoordinates(encodeModuleCoordinates(full)))
-
-        val sparse = ModuleCoordinates(null, "app", null)
-        assertEquals(sparse, decodeModuleCoordinates(encodeModuleCoordinates(sparse)))
-        assertFalse(decodeModuleCoordinates("").artifact.isNotEmpty())
-    }
-
-    private data class Probe(
-        val classAnnotationPresent: Boolean,
-        val classAnnotationVisible: Boolean?,
-        val classAnnotationValue: String?,
-        val methodAnnotationPresent: Boolean,
-        val fieldAnnotationPresent: Boolean,
-        val fieldAnnotationValue: String?,
-        val attributePresent: Boolean,
-    )
-
-    private fun probe(bytes: ByteArray): Probe {
-        var classAnnotationPresent = false
-        var classAnnotationVisible: Boolean? = null
-        var classAnnotationValue: String? = null
-        var methodAnnotationPresent = false
-        var fieldAnnotationPresent = false
-        var fieldAnnotationValue: String? = null
-        var attributePresent = false
+    private fun memberDefaults(bytes: ByteArray): Map<String, String> {
+        val defaults = mutableMapOf<String, String>()
         ClassReader(bytes).accept(
             object : ClassVisitor(Opcodes.ASM9) {
-                override fun visitAnnotation(descriptor: String?, visible: Boolean): AnnotationVisitor? {
-                    if (descriptor == AiPolicyMarker.ANNOTATION_DESCRIPTOR) {
-                        classAnnotationPresent = true
-                        classAnnotationVisible = visible
-                        return policyValueVisitor { value -> classAnnotationValue = value }
-                    }
-                    return null
-                }
-
                 override fun visitMethod(
                     access: Int,
                     name: String?,
@@ -251,57 +320,19 @@ class AiPolicyMarkerTest {
                     signature: String?,
                     exceptions: Array<out String>?,
                 ): MethodVisitor? {
-                    // 不委托 super:ClassVisitor 默认返回 null,委托会丢失所有方法级回调。
+                    val methodName = name ?: return null
                     return object : MethodVisitor(Opcodes.ASM9) {
-                        override fun visitAnnotation(annotationDescriptor: String?, visible: Boolean): AnnotationVisitor? {
-                            if (annotationDescriptor == AiPolicyMarker.METHOD_ANNOTATION_DESCRIPTOR) {
-                                methodAnnotationPresent = true
+                        override fun visitAnnotationDefault(): AnnotationVisitor? = object : AnnotationVisitor(Opcodes.ASM9) {
+                            override fun visit(name: String?, value: Any?) {
+                                if (value is String) defaults[methodName] = value
                             }
-                            return null
                         }
                     }
-                }
-
-                override fun visitField(
-                    access: Int,
-                    name: String?,
-                    descriptor: String?,
-                    signature: String?,
-                    value: Any?,
-                ): FieldVisitor? {
-                    // 不委托 super:ClassVisitor 默认返回 null,委托会丢失所有字段级回调。
-                    return object : FieldVisitor(Opcodes.ASM9) {
-                        override fun visitAnnotation(annotationDescriptor: String?, visible: Boolean): AnnotationVisitor? {
-                            if (annotationDescriptor == AiPolicyMarker.FIELD_ANNOTATION_DESCRIPTOR) {
-                                fieldAnnotationPresent = true
-                                return policyValueVisitor { value -> fieldAnnotationValue = value }
-                            }
-                            return null
-                        }
-                    }
-                }
-
-                override fun visitAttribute(attribute: Attribute?) {
-                    if (attribute?.type == AiPolicyMarker.ATTRIBUTE_NAME) attributePresent = true
                 }
             },
             ClassReader.SKIP_CODE or ClassReader.SKIP_DEBUG or ClassReader.SKIP_FRAMES,
         )
-        return Probe(
-            classAnnotationPresent,
-            classAnnotationVisible,
-            classAnnotationValue,
-            methodAnnotationPresent,
-            fieldAnnotationPresent,
-            fieldAnnotationValue,
-            attributePresent,
-        )
-    }
-
-    private fun policyValueVisitor(consume: (String) -> Unit): AnnotationVisitor = object : AnnotationVisitor(Opcodes.ASM9) {
-        override fun visit(name: String?, value: Any?) {
-            if (name == AiPolicyMarker.ELEMENT_NAME && value is String) consume(value)
-        }
+        return defaults
     }
 
     private fun transform(original: ByteArray, settings: TransformSettings): ByteArray = RuntimeHarness().transformAndLoad(original, settings).transformedBytes
@@ -327,27 +358,22 @@ class AiPolicyMarkerTest {
         return writer.toByteArray()
     }
 
-    private fun settings(
-        aiPolicyEnabled: Boolean,
-        aiPolicyContact: String? = null,
-        aiPolicyExceptions: List<String> = emptyList(),
-        aiPolicyPackages: List<String> = emptyList(),
+    private fun markerSettings(
+        aiPolicyEnabled: Boolean = true,
+        aiPolicyPackages: List<String> = listOf("sample"),
+        aiPolicyExcludePackages: List<String> = emptyList(),
         stringGuardPackages: List<String> = listOf("sample"),
-        moduleCoordinates: ModuleCoordinates? = null,
-        strictStringCoverage: Boolean = false,
     ): TransformSettings = TransformSettings(
         enabled = true,
         java9StringConcatEnabled = true,
-        strictStringCoverage = strictStringCoverage,
+        strictStringCoverage = false,
         removeSourceDebugExtension = false,
         stringGuardPackages = stringGuardPackages,
         keepStringPackages = emptyList(),
         removeSourceDebugExtensionPackages = emptyList(),
         keepSourceDebugExtensionPackages = emptyList(),
         aiPolicyEnabled = aiPolicyEnabled,
-        aiPolicyContact = aiPolicyContact,
-        aiPolicyExceptions = aiPolicyExceptions,
         aiPolicyPackages = aiPolicyPackages,
-        moduleCoordinates = moduleCoordinates,
+        aiPolicyExcludePackages = aiPolicyExcludePackages,
     )
 }

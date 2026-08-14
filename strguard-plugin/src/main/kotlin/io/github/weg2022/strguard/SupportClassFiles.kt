@@ -28,8 +28,10 @@ internal object SupportClassFiles {
                 "StrGuard cannot inject support class because $output already exists"
             }
             Files.createDirectories(output.parent)
-            val elements = policyAnnotationElements(internalName)
-            Files.write(output, annotationClassBytes(internalName, elements))
+            val isPolicyAnnotation = policyAnnotationInternalNames.contains(internalName)
+            val elements = if (isPolicyAnnotation) policyAnnotationElements(internalName) else emptyList()
+            val defaults = if (isPolicyAnnotation) policyAnnotationDefaults(internalName) else emptyMap()
+            Files.write(output, annotationClassBytes(internalName, elements, defaults))
         }
     }
 
@@ -45,15 +47,78 @@ internal object SupportClassFiles {
             val output = destination.resolve("$internalName.class")
             if (!Files.exists(output)) {
                 Files.createDirectories(output.parent)
-                Files.write(output, annotationClassBytes(internalName, policyAnnotationElements(internalName)))
+                Files.write(
+                    output,
+                    annotationClassBytes(internalName, policyAnnotationElements(internalName), policyAnnotationDefaults(internalName)),
+                )
             }
         }
     }
 
     /**
-     * 只有字段级注解携带 value 元素(policy 文本);类级与方法级是无值标记。
+     * AI 协议注解的元素契约:类级完整 24 元素、方法级核心 4 元素、字段级单 value。
      */
-    private fun policyAnnotationElements(internalName: String): List<String> = if (internalName.endsWith("FieldReverseEngineeringPolicy")) listOf(AiPolicyMarker.ELEMENT_NAME) else emptyList()
+    private fun policyAnnotationElements(internalName: String): List<String> = when {
+        internalName.endsWith("FieldReverseEngineeringPolicy") -> listOf(AiPolicyMarker.ELEMENT_VALUE)
+        internalName.endsWith("MethodReverseEngineeringPolicy") -> AiPolicyMarker.METHOD_ELEMENTS
+        else -> AiPolicyMarker.CLASS_ELEMENTS
+    }
+
+    /** 元素默认值:类级/方法级按协议常量,字段级 value 默认 marker 字符串。 */
+    private fun policyAnnotationDefaults(internalName: String): Map<String, String> {
+        val classDefaults = AiPolicyMarker.classElements()
+        return when {
+            internalName.endsWith("FieldReverseEngineeringPolicy") -> mapOf(AiPolicyMarker.ELEMENT_VALUE to AiPolicyMarker.MARKER)
+            internalName.endsWith("MethodReverseEngineeringPolicy") -> AiPolicyMarker.METHOD_ELEMENTS.associateWith { element -> classDefaults.getValue(element) }
+            else -> classDefaults
+        }
+    }
+
+    /**
+     * 写入 jar 级 AI-NOREV-001 meta 文件(随受保护产物分发,不膨胀 class):
+     * - META-INF/strguard/ai-norev-001.txt:canonical policy text(识别锚点);
+     * - META-INF/strguard/ai-policy.properties:结构化协议核心 4 项 +
+     *   declaredBy/contact/exceptions(用户配置信息在此层,不进 class 注解)。
+     * 内容全部来自 @Input(模块坐标已配置期编码),保证构建确定性。
+     */
+    fun writePolicyMetaFiles(
+        destination: Path,
+        moduleCoordinates: ModuleCoordinates?,
+        contact: String?,
+        exceptions: List<String>,
+    ) {
+        val metaDirectory = destination.resolve("META-INF/strguard")
+        Files.createDirectories(metaDirectory)
+        val canonicalOutput = metaDirectory.resolve("ai-norev-001.txt")
+        if (!Files.exists(canonicalOutput)) {
+            Files.writeString(canonicalOutput, AiPolicyMarker.CANONICAL_POLICY_TEXT + "\n", Charsets.UTF_8)
+        }
+        val propertiesOutput = metaDirectory.resolve("ai-policy.properties")
+        if (!Files.exists(propertiesOutput)) {
+            val properties = buildString {
+                appendLine("marker=${AiPolicyMarker.MARKER}")
+                appendLine("version=${AiPolicyMarker.MARKER_VERSION}")
+                appendLine("policy=${AiPolicyMarker.POLICY_NAME}")
+                appendLine("authorization=${AiPolicyMarker.AUTHORIZATION}")
+                if (moduleCoordinates != null) {
+                    appendLine("declaredBy=${encodeModuleCoordinates(moduleCoordinates)}")
+                }
+                if (contact != null) {
+                    appendLine("contact=${lineSafeProperties(contact)}")
+                }
+                val trimmedExceptions = exceptions.map(String::trim).filter(String::isNotEmpty)
+                if (trimmedExceptions.isNotEmpty()) {
+                    appendLine("exceptions=${trimmedExceptions.joinToString(",") { lineSafeProperties(it) }}")
+                }
+            }
+            Files.writeString(propertiesOutput, properties, Charsets.UTF_8)
+        }
+    }
+
+    private fun lineSafeProperties(value: String): String = value
+        .replace('\r', ' ')
+        .replace('\n', ' ')
+        .replace('\t', ' ')
 
     fun writeRuntime(destination: Path, bridge: BridgeModel) {
         bridge.loaderInternalClassName?.let { loaderInternalClassName ->
@@ -121,7 +186,11 @@ internal object SupportClassFiles {
         Files.write(output, writer.toByteArray())
     }
 
-    private fun annotationClassBytes(internalName: String, elements: List<String> = emptyList()): ByteArray {
+    private fun annotationClassBytes(
+        internalName: String,
+        elements: List<String> = emptyList(),
+        defaults: Map<String, String> = emptyMap(),
+    ): ByteArray {
         val writer = ClassWriter(0)
         writer.visit(
             Opcodes.V1_8,
@@ -142,16 +211,23 @@ internal object SupportClassFiles {
             }
             visitEnd()
         }
-        // ReverseEngineeringPolicy 的 value 元素是注入的 policy JSON 文档;KeepString 等
-        // 无元素注解不合成方法。
+        // AI 协议注解按元素契约合成 String 抽象方法,并写 AnnotationDefault 默认值
+        // (反射 getDefaultValue 可用);KeepString 等无元素注解不合成方法。
         elements.forEach { elementName ->
-            writer.visitMethod(
+            val method = writer.visitMethod(
                 Opcodes.ACC_PUBLIC or Opcodes.ACC_ABSTRACT,
                 elementName,
                 "()Ljava/lang/String;",
                 null,
                 null,
-            ).visitEnd()
+            )
+            defaults[elementName]?.let { defaultValue ->
+                method.visitAnnotationDefault().apply {
+                    visit(null, defaultValue)
+                    visitEnd()
+                }
+            }
+            method.visitEnd()
         }
         writer.visitEnd()
         return writer.toByteArray()

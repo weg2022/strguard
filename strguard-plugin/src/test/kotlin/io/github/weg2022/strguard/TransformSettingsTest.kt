@@ -152,6 +152,38 @@ class TransformSettingsTest {
     }
 
     @Test
+    fun `ai policy exclude selectors take precedence over includes`() {
+        val settings = settings(
+            enabled = true,
+            aiPolicyEnabled = true,
+            aiPolicyPackages = listOf("sample"),
+            aiPolicyExcludePackages = listOf("sample.skipped"),
+        )
+
+        assertTrue(settings.shouldApplyAiPolicy("sample/app/Secret"))
+        assertFalse(settings.shouldApplyAiPolicy("sample/skipped/Generated"))
+        // shouldTransformClass 是三路并集:字符串保护(空 include = 全部)仍会选中被
+        // aiPolicy 排除的类;exclude 只作用于 aiPolicy 选择。
+        assertTrue(settings.shouldTransformStrings("sample/skipped/Generated"))
+        assertTrue(settings.shouldTransformClass("sample/skipped/Generated"))
+    }
+
+    @Test
+    fun `ai policy exclude selectors are validated against eligible classes`() {
+        val settings = settings(
+            enabled = true,
+            aiPolicyEnabled = true,
+            aiPolicyExcludePackages = listOf("missing.exclude.package"),
+        )
+
+        val failure = assertFailsWith<IllegalArgumentException> {
+            settings.analyzeClasses(listOf("sample/empty/NoLiteral"))
+        }
+        assertContains(failure.message.orEmpty(), "aiPolicyExcludePackages")
+        assertContains(failure.message.orEmpty(), "missing/exclude/package")
+    }
+
+    @Test
     fun `report properties use a deterministic aggregate-only schema`() {
         val report =
             TransformReport(
@@ -221,6 +253,7 @@ class TransformSettingsTest {
         keepSourceDebugExtensionPackages: List<String> = emptyList(),
         aiPolicyEnabled: Boolean = false,
         aiPolicyPackages: List<String> = emptyList(),
+        aiPolicyExcludePackages: List<String> = emptyList(),
     ): TransformSettings = TransformSettings(
         enabled = enabled,
         java9StringConcatEnabled = true,
@@ -231,5 +264,6 @@ class TransformSettingsTest {
         keepSourceDebugExtensionPackages = keepSourceDebugExtensionPackages,
         aiPolicyEnabled = aiPolicyEnabled,
         aiPolicyPackages = aiPolicyPackages,
+        aiPolicyExcludePackages = aiPolicyExcludePackages,
     )
 }

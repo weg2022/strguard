@@ -147,6 +147,9 @@ class StrGuardPlugin : Plugin<Project> {
                 task.aiPolicyPackages.convention(
                     project.strGuardPackageSelectors(extension, extension.aiPolicyPackages, "aiPolicyPackages"),
                 )
+                task.aiPolicyExcludePackages.convention(
+                    project.strGuardPackageSelectors(extension, extension.aiPolicyExcludePackages, "aiPolicyExcludePackages"),
+                )
                 task.moduleCoordinates.convention(
                     encodeModuleCoordinates(
                         ModuleCoordinates(

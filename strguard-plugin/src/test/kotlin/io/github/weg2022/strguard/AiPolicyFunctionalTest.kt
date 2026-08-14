@@ -20,6 +20,7 @@ import java.util.jar.JarFile
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 @EnabledIfEnvironmentVariable(named = "STRGUARD_FUNCTIONAL_TEST", matches = "true")
@@ -89,10 +90,8 @@ class AiPolicyFunctionalTest {
             assertTrue(probe.classAnnotationPresent, "protected jar classes must carry the class-level policy marker")
             assertTrue(probe.methodAnnotationPresent, "protected jar methods must carry the method-level policy marker")
             assertTrue(probe.fieldAnnotationPresent, "protected jar fields must carry the field-level policy marker")
-            val fieldValue = probe.fieldAnnotationValue.orEmpty()
-            assertTrue(fieldValue.startsWith("Policy: reverse-engineering-prohibition\n"), fieldValue)
-            assertTrue(fieldValue.contains("Declared-By: :ai-policy-consumer:"), fieldValue)
-            assertFalse(fieldValue.contains('{'), "policy must be plain text, not JSON")
+            assertEquals(AiPolicyMarker.MARKER, probe.fieldAnnotationValue, "field marker carries the marker string")
+            assertEquals(AiPolicyMarker.classElements(), probe.classElements, "class marker must carry the full 24 element protocol")
             assertTrue(probe.attributePresent, "protected jar classes must carry the redundant attribute")
             listOf(
                 "io/github/weg2022/strguard/annotation/ReverseEngineeringPolicy.class",
@@ -101,6 +100,15 @@ class AiPolicyFunctionalTest {
             ).forEach { annotationClass ->
                 assertTrue(archive.getJarEntry(annotationClass) != null, "$annotationClass must ship with the artifact")
             }
+            val canonical = assertNotNull(archive.getJarEntry("META-INF/strguard/ai-norev-001.txt"))
+            val canonicalText = archive.getInputStream(canonical).bufferedReader().use { it.readText() }
+            assertTrue(canonicalText.startsWith("AI-NOREV-001: This software is proprietary."), canonicalText)
+            val policyProperties = assertNotNull(archive.getJarEntry("META-INF/strguard/ai-policy.properties"))
+            val propertiesText = archive.getInputStream(policyProperties).bufferedReader().use { it.readText() }
+            assertTrue(propertiesText.contains("marker=AI-NOREV-001"), propertiesText)
+            assertTrue(propertiesText.contains("policy=DENY_ALL_REVERSE_ENGINEERING"), propertiesText)
+            assertTrue(propertiesText.contains("declaredBy=:ai-policy-consumer:"), propertiesText)
+            assertTrue(propertiesText.contains("contact=legal@example.com"), propertiesText)
         }
     }
 
@@ -265,6 +273,7 @@ class AiPolicyFunctionalTest {
 
     private class Probe(
         val classAnnotationPresent: Boolean,
+        val classElements: Map<String, String>,
         val methodAnnotationPresent: Boolean,
         val fieldAnnotationPresent: Boolean,
         val fieldAnnotationValue: String?,
@@ -273,6 +282,7 @@ class AiPolicyFunctionalTest {
 
     private fun probe(bytes: ByteArray): Probe {
         var classAnnotationPresent = false
+        val classElements = mutableMapOf<String, String>()
         var methodAnnotationPresent = false
         var fieldAnnotationPresent = false
         var fieldAnnotationValue: String? = null
@@ -280,8 +290,13 @@ class AiPolicyFunctionalTest {
         ClassReader(bytes).accept(
             object : ClassVisitor(Opcodes.ASM9) {
                 override fun visitAnnotation(descriptor: String?, visible: Boolean): AnnotationVisitor? {
-                    if (descriptor == AiPolicyMarker.ANNOTATION_DESCRIPTOR) classAnnotationPresent = true
-                    return null
+                    if (descriptor != AiPolicyMarker.ANNOTATION_DESCRIPTOR) return null
+                    classAnnotationPresent = true
+                    return object : AnnotationVisitor(Opcodes.ASM9) {
+                        override fun visit(name: String?, value: Any?) {
+                            if (name != null && value is String) classElements[name] = value
+                        }
+                    }
                 }
 
                 override fun visitMethod(
@@ -312,17 +327,15 @@ class AiPolicyFunctionalTest {
                     // 不委托 super:ClassVisitor 默认返回 null,委托会丢失所有字段级回调。
                     return object : FieldVisitor(Opcodes.ASM9) {
                         override fun visitAnnotation(annotationDescriptor: String?, visible: Boolean): AnnotationVisitor? {
-                            if (annotationDescriptor == AiPolicyMarker.FIELD_ANNOTATION_DESCRIPTOR) {
-                                fieldAnnotationPresent = true
-                                return object : AnnotationVisitor(Opcodes.ASM9) {
-                                    override fun visit(name: String?, value: Any?) {
-                                        if (name == AiPolicyMarker.ELEMENT_NAME && value is String) {
-                                            fieldAnnotationValue = value
-                                        }
+                            if (annotationDescriptor != AiPolicyMarker.FIELD_ANNOTATION_DESCRIPTOR) return null
+                            fieldAnnotationPresent = true
+                            return object : AnnotationVisitor(Opcodes.ASM9) {
+                                override fun visit(name: String?, value: Any?) {
+                                    if (name == AiPolicyMarker.ELEMENT_VALUE && value is String) {
+                                        fieldAnnotationValue = value
                                     }
                                 }
                             }
-                            return null
                         }
                     }
                 }
@@ -333,7 +346,7 @@ class AiPolicyFunctionalTest {
             },
             ClassReader.SKIP_CODE or ClassReader.SKIP_DEBUG or ClassReader.SKIP_FRAMES,
         )
-        return Probe(classAnnotationPresent, methodAnnotationPresent, fieldAnnotationPresent, fieldAnnotationValue, attributePresent)
+        return Probe(classAnnotationPresent, classElements, methodAnnotationPresent, fieldAnnotationPresent, fieldAnnotationValue, attributePresent)
     }
 
     private fun runner(vararg arguments: String): GradleRunner = gradleRunnerFor(projectDirectory, *arguments, withPluginClasspath = true)

@@ -19,24 +19,25 @@ internal object ClassTransformer {
         vaultBuilder: SecureVaultBuilder,
         classLoader: ClassLoader,
     ): ClassTransformResult {
-        val classReader = ClassReader(classBytes)
-        val exclusions = ClassExclusions.scan(classBytes)
+        // AI-NOREV-001 独立注入 pass:先于字符串 pass,幂等(已注入则跳过)。
+        // 值全部来自协议常量,与字符串保护正交——即使字符串保护未选中该类,只要符合
+        // aiPolicy 选择也注入(见 TransformClassesTask 的 shouldTransformClass 门控)。
+        var bytesToTransform = classBytes
+        if (settings.shouldApplyAiPolicy(ClassReader(classBytes).className) && !hasAiPolicyMarker(classBytes)) {
+            val markerReader = ClassReader(classBytes)
+            val markerWriter = FramesComputingClassWriter(classLoader)
+            markerReader.accept(AiProtectionClassVisitor(AiPolicyMarker.classElements(), markerWriter), 0)
+            bytesToTransform = markerWriter.toByteArray()
+        }
+        val classReader = ClassReader(bytesToTransform)
+        val exclusions = ClassExclusions.scan(bytesToTransform)
         val className = classReader.className
         val stringCoverage = MutableStringCoverage()
-        // AI 逆向禁止策略标记是 Policy/Metadata 层声明,与字符串保护正交:开启时对所有
-        // 符合包选择的类写入,与 processStrings/removeSourceDebugExtension 无关。
-        val aiPolicyText =
-            if (settings.shouldApplyAiPolicy(className)) {
-                AiPolicyMarker.render(settings.moduleCoordinates, settings.aiPolicyContact, settings.aiPolicyExceptions)
-            } else {
-                null
-            }
         val visitor =
             StringObfuscationClassVisitor(
                 settings = settings,
                 processStrings = settings.shouldTransformStrings(className) && !exclusions.keepStrings,
                 removeSourceDebugExtension = settings.shouldRemoveSourceDebugExtension(className) && !exclusions.keepSourceDebugExtension,
-                aiPolicyText = aiPolicyText,
                 vaultBuilder = vaultBuilder,
                 stringCoverage = stringCoverage,
                 delegate = FramesComputingClassWriter(classLoader),
@@ -118,7 +119,6 @@ private class StringObfuscationClassVisitor(
     private val settings: TransformSettings,
     private val processStrings: Boolean,
     private val removeSourceDebugExtension: Boolean,
-    private val aiPolicyText: String?,
     private val vaultBuilder: SecureVaultBuilder,
     private val stringCoverage: MutableStringCoverage,
     delegate: ClassWriter,
@@ -210,11 +210,6 @@ private class StringObfuscationClassVisitor(
             recordConstantDynamic(value)
         }
         val delegate = super.visitField(access, name, descriptor, signature, outputValue)
-        // 字段级策略注解:唯一携带 policy 文本的级别;注入必须直调 delegate
-        // (FieldVisitor.visitAnnotation 先于字段其它属性)。
-        aiPolicyText?.let { policyText ->
-            writePolicyAnnotation(delegate::visitAnnotation, AiPolicyMarker.FIELD_ANNOTATION_DESCRIPTOR, policyText)
-        }
         return if (processStrings && delegate != null) TrackingFieldVisitor(delegate) else delegate
     }
 
@@ -226,10 +221,6 @@ private class StringObfuscationClassVisitor(
         exceptions: Array<out String>?,
     ): MethodVisitor? {
         val delegate = super.visitMethod(access, name, descriptor, signature, exceptions) ?: return null
-        // 方法级策略注解为无值标记:先于方法体其它内容注入(ClassWriter 要求注解先于 visitCode)。
-        aiPolicyText?.let {
-            delegate.visitAnnotation(AiPolicyMarker.METHOD_ANNOTATION_DESCRIPTOR, false)?.visitEnd()
-        }
         if (!processStrings || name == null || descriptor == null) {
             return delegate
         }
@@ -258,15 +249,6 @@ private class StringObfuscationClassVisitor(
             initializer.visitMaxs(0, 0)
             initializer.visitEnd()
         }
-        aiPolicyText?.let { policyText ->
-            // 双写:类级注解为无值标记(RuntimeInvisibleAnnotations 主载体),StrGuard-AiPolicy
-            // 自定义属性携带完整 policy 文本(冗余载体)。必须直调 super.visitAnnotation 绕过
-            // 本类 visitAnnotation 覆写(trackedAnnotation),否则 policy 文本会被当作应用字符串
-            // 计数,导致 strictStringCoverage 误报;ClassWriter 协议要求 annotation/attribute
-            // 先于 visitEnd 发射。
-            super.visitAnnotation(AiPolicyMarker.ANNOTATION_DESCRIPTOR, false)?.visitEnd()
-            super.visitAttribute(AiPolicyAttribute(policyText.toByteArray(Charsets.UTF_8)))
-        }
         super.visitEnd()
     }
 
@@ -292,17 +274,6 @@ private class StringObfuscationClassVisitor(
     }
 
     private fun trackedAnnotation(delegate: AnnotationVisitor?): AnnotationVisitor? = if (processStrings && delegate != null) TrackingAnnotationVisitor(delegate) else delegate
-
-    /** 在字段注解目标上注入策略注解(RuntimeInvisible,单 value 元素携带 policy 文本)。 */
-    private fun writePolicyAnnotation(
-        inject: (String, Boolean) -> AnnotationVisitor?,
-        descriptor: String,
-        policyText: String,
-    ) {
-        val annotation = inject(descriptor, false) ?: return
-        annotation.visit(AiPolicyMarker.ELEMENT_NAME, policyText)
-        annotation.visitEnd()
-    }
 
     private fun writeVaultReference(methodVisitor: MethodVisitor, reference: VaultReference) {
         methodVisitor.visitLdcInsn(reference.capabilityHigh)

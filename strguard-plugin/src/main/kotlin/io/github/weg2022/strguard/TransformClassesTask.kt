@@ -93,6 +93,9 @@ abstract class TransformClassesTask : DefaultTask() {
     @get:Input
     abstract val aiPolicyPackages: ListProperty<String>
 
+    @get:Input
+    abstract val aiPolicyExcludePackages: ListProperty<String>
+
     /** 声明者坐标(group:artifact:version),配置期编码后传入,执行期不得访问 project。 */
     @get:Input
     abstract val moduleCoordinates: Property<String>
@@ -113,6 +116,7 @@ abstract class TransformClassesTask : DefaultTask() {
                 aiPolicyContact = aiPolicyContact.orNull,
                 aiPolicyExceptions = aiPolicyExceptions.get(),
                 aiPolicyPackages = aiPolicyPackages.get(),
+                aiPolicyExcludePackages = aiPolicyExcludePackages.get(),
                 moduleCoordinates = decodeModuleCoordinates(moduleCoordinates.get())
                     .takeIf { coordinates -> coordinates.artifact.isNotEmpty() },
             )
@@ -214,6 +218,12 @@ abstract class TransformClassesTask : DefaultTask() {
             SupportClassFiles.writeRuntime(destination, builder.bridge)
             if (settings.aiPolicyEnabled) {
                 SupportClassFiles.writePolicyAnnotation(destination)
+                SupportClassFiles.writePolicyMetaFiles(
+                    destination,
+                    settings.moduleCoordinates,
+                    settings.aiPolicyContact,
+                    settings.aiPolicyExceptions,
+                )
             }
             builder.writeNativeInputs(nativeInputs).close()
             writeReport(reports, report)

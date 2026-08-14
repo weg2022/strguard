@@ -134,9 +134,9 @@ internal object StrGuardShrinkerRules {
         # (RuntimeInvisibleAnnotations) through ProGuard and R8 shrinking. The
         # annotation classes themselves must stay reachable: shrinkers drop
         # annotations whose annotation type was shrunk away, even with
-        # -keepattributes in place. The redundant StrGuard-AiPolicy class
-        # attribute cannot be listed here: R8's keep-rules parser only accepts a
-        # fixed set of attribute names.
+        # -keepattributes in place. The redundant AI-NOREV-001 class attribute
+        # cannot be listed here: R8's keep-rules parser only accepts a fixed set
+        # of attribute names.
         -keepattributes RuntimeInvisibleAnnotations
         -keep class io.github.weg2022.strguard.annotation.ReverseEngineeringPolicy { *; }
         -keep class io.github.weg2022.strguard.annotation.MethodReverseEngineeringPolicy { *; }

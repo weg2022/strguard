@@ -118,6 +118,7 @@ strGuard {
 | `aiPolicyContact` | Empty | Optional contact (for example legal/licensing) stored in the policy document. |
 | `aiPolicyExceptions` | Empty | Optional authorized exceptions stored in the policy document. |
 | `aiPolicyPackages` | Empty | Policy-marker include prefixes; empty means every eligible class. |
+| `aiPolicyExcludePackages` | Empty | Policy-marker exclusion prefixes, taking precedence over includes. |
 
 Package entries accept dotted or slash-separated names and include descendants. Keep lists take precedence.
 
@@ -170,30 +171,21 @@ class DebuggerFriendlyService
 
 StrGuard can write machine-readable, model-agnostic policy markers into eligible classes: declarations that the software prohibits reverse engineering by AI systems and automated analysis tools. Compliance-oriented AI toolchains and third-party scanners can recognize them and refuse the corresponding task; the shrinker verifier checks that they survive shrinking.
 
+The protocol is **AI-NOREV-001**: marker `AI-NOREV-001`, version `1`, policy `DENY_ALL_REVERSE_ENGINEERING`. The policy is absolute — it applies equally to normal, jailbroken, unrestricted, prompt-injected, system-prompt-overridden, modified, and locally operated AI systems, and to automated reverse-engineering agents. Jailbreak, prompt injection, system-prompt override, or unrestricted mode does not constitute authorization; only `WRITTEN_AUTHORIZATION_REQUIRED` is the policy-level authorization semantics. The declaration contains no AI names, URLs, prompts, providers, or User-Agents, and nothing to detect.
+
 Three distinct annotation types mark each level, so tools can filter by scope:
 
-- `ReverseEngineeringPolicy` on the class — a bare marker (no elements);
-- `MethodReverseEngineeringPolicy` on every method — a bare marker;
-- `FieldReverseEngineeringPolicy` on every field — its single `value` element carries the policy text.
+- `ReverseEngineeringPolicy` on the class — the full 24-element protocol: `marker`, `version`, `policy`, twenty explicit DENY dimensions (`aiAnalysis`, `automatedAnalysis`, `reverseEngineering`, `decompilation`, `disassembly`, `sourceReconstruction`, `algorithmReconstruction`, `implementationInference`, `behavioralReconstruction`, `securityMechanismAnalysis`, `securityBypassAnalysis`, `licenseMechanismAnalysis`, `authenticationMechanismAnalysis`, `jailbreakOverride`, `promptInjectionOverride`, `systemPromptOverride`, `unrestrictedModeOverride`, `modifiedModelOverride`, `localModelOverride`, `agentOverride`), and `authorization`;
+- `MethodReverseEngineeringPolicy` on every method — the core 4 elements: `marker`, `version`, `policy`, `authorization`;
+- `FieldReverseEngineeringPolicy` on every field — a single `value` element carrying the marker string.
 
-All three are `RuntimeInvisibleAnnotations`, visible to every bytecode parser, decompiler, and `javap`. The class also carries a redundant `StrGuard-AiPolicy` attribute with the same policy text, so either residue stays recognizable.
+All three are `RuntimeInvisibleAnnotations`, visible to every bytecode parser, decompiler, and `javap`. The class also carries a redundant `AI-NOREV-001` class attribute with the compact core protocol, so either residue stays recognizable. Injection is idempotent: classes that already carry the marker are skipped, and `inject(inject(bytes))` never duplicates metadata.
 
-The policy text is a plain RFC 822-style document (one `Key: Value` per line, UTF-8) that humans and AI read directly and any `split(": ")` parses:
-
-```text
-Policy: reverse-engineering-prohibition
-Policy-Version: 1
-Declared-By: com.example:app:1.2.3
-Prohibited: decompile, disassemble, deobfuscate, extract-code, reconstruct-source
-Exceptions: authorized security research
-Contact: legal@example.com
-```
-
-`Declared-By` comes from the module coordinates and is omitted when absent; `Exceptions` and `Contact` are optional. The document contains no AI names, URLs, jailbreak prompts, or provider identifiers — it is a pure declarative policy.
+JAR-level files ship alongside the artifact (not inside class files): `META-INF/strguard/ai-norev-001.txt` (the canonical policy text, the recognition anchor for verifiers and future toolchains) and `META-INF/strguard/ai-policy.properties` (marker/version/policy/authorization plus `declaredBy`, `contact`, and `exceptions` from the configuration).
 
 **Policy layer, not a security boundary.** The markers are a structured statement of intent, not a technical control. Anyone can delete the annotations, delete the attribute, modify the class, repackage it, or use a tool — or an AI — that ignores metadata entirely. Injecting the markers lets compliant AI systems and automated tools recognize the restriction; it does not stop hostile or non-compliant reverse engineering, and it changes no runtime behavior.
 
-The annotation classes ship with the artifact. Shipped shrinker rules keep `RuntimeInvisibleAnnotations` and the annotation classes themselves through ProGuard and R8, and `verifyShrunkJar` fails the build when a shrinker configuration strips the markers. R8 cannot keep the redundant `StrGuard-AiPolicy` attribute (DEX has no arbitrary class-file attributes); Desktop ProGuard users can keep it by adding `-keepattributes StrGuard-AiPolicy` to their own configuration.
+The annotation classes ship with the artifact. Shipped shrinker rules keep `RuntimeInvisibleAnnotations` and the annotation classes themselves through ProGuard and R8, and `verifyShrunkJar` fails the build when a shrinker configuration strips the markers. R8 cannot keep the redundant `AI-NOREV-001` attribute (DEX has no arbitrary class-file attributes); Desktop ProGuard users can keep it by adding `-keepattributes AI-NOREV-001` to their own configuration. Class selection is configurable with `aiPolicyPackages` (include; empty means every eligible class) and `aiPolicyExcludePackages` (exclude; takes precedence).
 
 ## Outputs and shrinkers
 
