@@ -51,7 +51,7 @@ android.newDsl=false
 
 ```kotlin
 plugins {
-    id("io.github.weg2022.strguard") version "3.0.0"
+    id("io.github.weg2022.strguard") version "3.1.0"
 }
 ```
 
