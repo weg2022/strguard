@@ -142,6 +142,21 @@ internal object AndroidAdapter {
             task.keepSourceDebugExtensionPackages.convention(
                 project.strGuardPackageSelectors(extension, extension.keepSourceDebugExtensionPackages, "keepSourceDebugExtensionPackages"),
             )
+            task.aiPolicyEnabled.convention(extension.aiPolicyEnabled)
+            task.aiPolicyContact.convention(extension.aiPolicyContact)
+            task.aiPolicyExceptions.convention(extension.aiPolicyExceptions)
+            task.aiPolicyPackages.convention(
+                project.strGuardPackageSelectors(extension, extension.aiPolicyPackages, "aiPolicyPackages"),
+            )
+            task.moduleCoordinates.convention(
+                encodeModuleCoordinates(
+                    ModuleCoordinates(
+                        group = project.group?.toString()?.takeIf(String::isNotEmpty),
+                        artifact = project.name,
+                        version = project.version?.toString()?.takeIf { version -> version != "unspecified" },
+                    ),
+                ),
+            )
         }
         variant.artifacts
             .forScope(ScopedArtifacts.Scope.PROJECT)

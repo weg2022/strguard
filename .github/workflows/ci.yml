@@ -120,6 +120,8 @@ jobs:
     env:
       STRGUARD_TARGET_TRIPLE: ${{ matrix.target }}
       STRGUARD_COMPOSE_DISTRIBUTION_TEST: ${{ matrix.target == 'x86_64-unknown-linux-gnu' && 'true' || 'false' }}
+      # TestKit 功能测试仅 CI 运行(本地默认跳过),见 @EnabledIfEnvironmentVariable 门控
+      STRGUARD_FUNCTIONAL_TEST: "true"
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
@@ -140,6 +142,12 @@ jobs:
           --tests "io.github.weg2022.strguard.JvmPluginCompatibilityTest"
           --tests "io.github.weg2022.strguard.KotlinMultiplatformPluginFunctionalTest"
           --tests "io.github.weg2022.strguard.DesktopShrinkerFunctionalTest"
+          --tests "io.github.weg2022.strguard.ConfigurationFailureFunctionalTest"
+          --tests "io.github.weg2022.strguard.DisabledPluginFunctionalTest"
+          --tests "io.github.weg2022.strguard.NativeToolchainFailureFunctionalTest"
+          --tests "io.github.weg2022.strguard.AsmIsolationFunctionalTest"
+          --tests "io.github.weg2022.strguard.StrGuardBuildCacheFunctionalTest"
+          --tests "io.github.weg2022.strguard.AiPolicyFunctionalTest"
           --stacktrace
       - name: Build and run public Desktop samples
         if: matrix.target == 'x86_64-unknown-linux-gnu'
@@ -159,6 +167,8 @@ jobs:
     timeout-minutes: 120
     env:
       STRGUARD_ANDROID_NATIVE_TEST: "true"
+      # TestKit 功能测试仅 CI 运行(本地默认跳过),见 @EnabledIfEnvironmentVariable 门控
+      STRGUARD_FUNCTIONAL_TEST: "true"
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
@@ -183,6 +193,7 @@ jobs:
           --tests "io.github.weg2022.strguard.KotlinAndroidPluginFunctionalTest"
           --tests "io.github.weg2022.strguard.KotlinMultiplatformPluginFunctionalTest"
           --tests "io.github.weg2022.strguard.AndroidMultiModulePackagingFunctionalTest"
+          --tests "io.github.weg2022.strguard.AndroidPluginConfigurationTest"
           --stacktrace
       - name: Build public Android samples and instrumentation APK
         env:

@@ -9,6 +9,11 @@ internal class TransformSettings(
     keepStringPackages: List<String>,
     removeSourceDebugExtensionPackages: List<String>,
     keepSourceDebugExtensionPackages: List<String>,
+    val aiPolicyEnabled: Boolean = false,
+    val aiPolicyContact: String? = null,
+    aiPolicyExceptions: List<String> = emptyList(),
+    aiPolicyPackages: List<String> = emptyList(),
+    val moduleCoordinates: ModuleCoordinates? = null,
 ) {
     val stringGuardPackages: List<String> =
         normalizePackageSelectors("stringGuardPackages", stringGuardPackages)
@@ -18,8 +23,23 @@ internal class TransformSettings(
         normalizePackageSelectors("removeSourceDebugExtensionPackages", removeSourceDebugExtensionPackages)
     val keepSourceDebugExtensionPackages: List<String> =
         normalizePackageSelectors("keepSourceDebugExtensionPackages", keepSourceDebugExtensionPackages)
+    val aiPolicyExceptions: List<String> =
+        aiPolicyExceptions.map(String::trim).filter(String::isNotEmpty)
+    val aiPolicyPackages: List<String> =
+        normalizePackageSelectors("aiPolicyPackages", aiPolicyPackages)
 
-    fun shouldTransformClass(internalClassName: String): Boolean = shouldTransformStrings(internalClassName) || shouldRemoveSourceDebugExtension(internalClassName)
+    /**
+     * AI 逆向禁止策略标记与字符串保护、debug 信息移除完全正交:即使字符串保护未选中
+     * 某类,只要该类符合 aiPolicy 选择,也必须进入变换管线以写入 marker(见
+     * TransformClassesTask 的 shouldTransformClass 门控)。
+     */
+    fun shouldApplyAiPolicy(internalClassName: String): Boolean = aiPolicyEnabled &&
+        isEligibleClass(internalClassName) &&
+        matchesIncludedPackages(internalClassName, aiPolicyPackages)
+
+    fun shouldTransformClass(internalClassName: String): Boolean = shouldTransformStrings(internalClassName) ||
+        shouldRemoveSourceDebugExtension(internalClassName) ||
+        shouldApplyAiPolicy(internalClassName)
 
     fun shouldTransformStrings(internalClassName: String): Boolean = isEligibleClass(internalClassName) &&
         matchesIncludedPackages(internalClassName, stringGuardPackages) &&
@@ -53,6 +73,9 @@ internal class TransformSettings(
                 removeSourceDebugExtensionPackages,
                 eligibleClassNames,
             )
+        }
+        if (aiPolicyEnabled) {
+            validateExplicitIncludes("aiPolicyPackages", aiPolicyPackages, eligibleClassNames)
         }
         val matchedClasses = eligibleClassNames.count(::shouldTransformClass)
         return ClassSelectionSummary(

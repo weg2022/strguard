@@ -92,6 +92,11 @@ strGuard {
     removeSourceDebugExtension.set(false)
     removeSourceDebugExtensionPackages.set(listOf("com.example.app"))
     keepSourceDebugExtensionPackages.set(listOf("com.example.app.reflective"))
+
+    aiPolicyEnabled.set(true)
+    aiPolicyContact.set("legal@example.com")
+    aiPolicyExceptions.set(listOf("authorized security research"))
+    aiPolicyPackages.set(listOf("com.example.app"))
 }
 ```
 
@@ -109,6 +114,10 @@ strGuard {
 | `keepStringPackages` | Empty | String-protection exclusion prefixes. |
 | `removeSourceDebugExtensionPackages` | Empty | Source-debug-extension removal include prefixes. |
 | `keepSourceDebugExtensionPackages` | Empty | Source-debug-extension removal exclusion prefixes. |
+| `aiPolicyEnabled` | `false` | Writes the AI reverse-engineering prohibition marker into eligible classes. |
+| `aiPolicyContact` | Empty | Optional contact (for example legal/licensing) stored in the policy document. |
+| `aiPolicyExceptions` | Empty | Optional authorized exceptions stored in the policy document. |
+| `aiPolicyPackages` | Empty | Policy-marker include prefixes; empty means every eligible class. |
 
 Package entries accept dotted or slash-separated names and include descendants. Keep lists take precedence.
 
@@ -156,6 +165,35 @@ class DiagnosticStrings {
 @KeepSourceDebugExtension
 class DebuggerFriendlyService
 ```
+
+## AI reverse engineering prohibition marker
+
+StrGuard can write machine-readable, model-agnostic policy markers into eligible classes: declarations that the software prohibits reverse engineering by AI systems and automated analysis tools. Compliance-oriented AI toolchains and third-party scanners can recognize them and refuse the corresponding task; the shrinker verifier checks that they survive shrinking.
+
+Three distinct annotation types mark each level, so tools can filter by scope:
+
+- `ReverseEngineeringPolicy` on the class — a bare marker (no elements);
+- `MethodReverseEngineeringPolicy` on every method — a bare marker;
+- `FieldReverseEngineeringPolicy` on every field — its single `value` element carries the policy text.
+
+All three are `RuntimeInvisibleAnnotations`, visible to every bytecode parser, decompiler, and `javap`. The class also carries a redundant `StrGuard-AiPolicy` attribute with the same policy text, so either residue stays recognizable.
+
+The policy text is a plain RFC 822-style document (one `Key: Value` per line, UTF-8) that humans and AI read directly and any `split(": ")` parses:
+
+```text
+Policy: reverse-engineering-prohibition
+Policy-Version: 1
+Declared-By: com.example:app:1.2.3
+Prohibited: decompile, disassemble, deobfuscate, extract-code, reconstruct-source
+Exceptions: authorized security research
+Contact: legal@example.com
+```
+
+`Declared-By` comes from the module coordinates and is omitted when absent; `Exceptions` and `Contact` are optional. The document contains no AI names, URLs, jailbreak prompts, or provider identifiers — it is a pure declarative policy.
+
+**Policy layer, not a security boundary.** The markers are a structured statement of intent, not a technical control. Anyone can delete the annotations, delete the attribute, modify the class, repackage it, or use a tool — or an AI — that ignores metadata entirely. Injecting the markers lets compliant AI systems and automated tools recognize the restriction; it does not stop hostile or non-compliant reverse engineering, and it changes no runtime behavior.
+
+The annotation classes ship with the artifact. Shipped shrinker rules keep `RuntimeInvisibleAnnotations` and the annotation classes themselves through ProGuard and R8, and `verifyShrunkJar` fails the build when a shrinker configuration strips the markers. R8 cannot keep the redundant `StrGuard-AiPolicy` attribute (DEX has no arbitrary class-file attributes); Desktop ProGuard users can keep it by adding `-keepattributes StrGuard-AiPolicy` to their own configuration.
 
 ## Outputs and shrinkers
 
@@ -241,7 +279,7 @@ cargo clippy --manifest-path native/strguard-runtime/Cargo.toml --all-targets --
 cargo test --manifest-path native/strguard-runtime/Cargo.toml --locked
 ```
 
-Set `STRGUARD_ANDROID_NATIVE_TEST=true` and `ANDROID_NDK_VERSION=27.2.12479018` to compile all four Android runtimes in functional tests. Local tests do not start an emulator.
+Functional tests (Gradle TestKit, including Android) are CI-only: they are skipped locally unless `STRGUARD_FUNCTIONAL_TEST=true` is set. Set `STRGUARD_ANDROID_NATIVE_TEST=true` and `ANDROID_NDK_VERSION=27.2.12479018` to compile all four Android runtimes in functional tests. Local tests do not start an emulator.
 
 ## CI
 

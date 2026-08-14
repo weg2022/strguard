@@ -3,6 +3,7 @@ package io.github.weg2022.strguard
 import org.gradle.testkit.runner.GradleRunner
 import org.gradle.testkit.runner.TaskOutcome
 import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable
 import org.junit.jupiter.api.io.CleanupMode
 import org.junit.jupiter.api.io.TempDir
 import org.junit.jupiter.params.ParameterizedTest
@@ -20,6 +21,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
+@EnabledIfEnvironmentVariable(named = "STRGUARD_FUNCTIONAL_TEST", matches = "true")
 class DesktopShrinkerFunctionalTest {
     @TempDir(cleanup = CleanupMode.NEVER)
     lateinit var projectDirectory: Path

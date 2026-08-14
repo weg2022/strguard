@@ -3,6 +3,7 @@ package io.github.weg2022.strguard
 import org.gradle.testkit.runner.GradleRunner
 import org.gradle.testkit.runner.TaskOutcome
 import org.junit.jupiter.api.Assumptions.assumeTrue
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable
 import org.junit.jupiter.api.io.TempDir
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.ValueSource
@@ -13,6 +14,7 @@ import java.nio.file.Path
 import java.util.jar.JarFile
 import kotlin.test.*
 
+@EnabledIfEnvironmentVariable(named = "STRGUARD_FUNCTIONAL_TEST", matches = "true")
 class AndroidPluginConfigurationTest {
     @TempDir
     lateinit var projectDirectory: Path

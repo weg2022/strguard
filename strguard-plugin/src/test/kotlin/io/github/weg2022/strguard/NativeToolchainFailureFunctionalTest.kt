@@ -1,6 +1,7 @@
 package io.github.weg2022.strguard
 
 import org.gradle.testkit.runner.GradleRunner
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable
 import org.junit.jupiter.api.io.TempDir
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
@@ -8,6 +9,7 @@ import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertTrue
 
+@EnabledIfEnvironmentVariable(named = "STRGUARD_FUNCTIONAL_TEST", matches = "true")
 class NativeToolchainFailureFunctionalTest {
     @TempDir
     lateinit var projectDirectory: Path

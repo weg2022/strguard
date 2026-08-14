@@ -9,10 +9,17 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 internal object SupportClassFiles {
-    private val annotationNames = listOf(
-        "io/github/weg2022/strguard/annotation/KeepString",
-        "io/github/weg2022/strguard/annotation/KeepSourceDebugExtension",
+    private val policyAnnotationInternalNames = listOf(
+        "io/github/weg2022/strguard/annotation/ReverseEngineeringPolicy",
+        "io/github/weg2022/strguard/annotation/MethodReverseEngineeringPolicy",
+        "io/github/weg2022/strguard/annotation/FieldReverseEngineeringPolicy",
     )
+
+    private val annotationNames =
+        listOf(
+            "io/github/weg2022/strguard/annotation/KeepString",
+            "io/github/weg2022/strguard/annotation/KeepSourceDebugExtension",
+        ) + policyAnnotationInternalNames
 
     fun writeAnnotations(destination: Path) {
         annotationNames.forEach { internalName ->
@@ -21,9 +28,32 @@ internal object SupportClassFiles {
                 "StrGuard cannot inject support class because $output already exists"
             }
             Files.createDirectories(output.parent)
-            Files.write(output, annotationClassBytes(internalName))
+            val elements = policyAnnotationElements(internalName)
+            Files.write(output, annotationClassBytes(internalName, elements))
         }
     }
+
+    /**
+     * 把 AI 策略注解类(类/方法/字段三级)写入变换产物 staging 目录,使其随受保护
+     * JAR/AAR 分发:注解为 CLASS retention,运行时不会触发解析,但类文件自洽便于
+     * 第三方合规扫描工具用反射或字节码解析识别策略声明。调用方必须先做
+     * aiPolicyEnabled 门控;与 writeAnnotations 不同,这里冲突时静默跳过
+     * (产物中已存在同名类时不应中断变换)。
+     */
+    fun writePolicyAnnotation(destination: Path) {
+        policyAnnotationInternalNames.forEach { internalName ->
+            val output = destination.resolve("$internalName.class")
+            if (!Files.exists(output)) {
+                Files.createDirectories(output.parent)
+                Files.write(output, annotationClassBytes(internalName, policyAnnotationElements(internalName)))
+            }
+        }
+    }
+
+    /**
+     * 只有字段级注解携带 value 元素(policy 文本);类级与方法级是无值标记。
+     */
+    private fun policyAnnotationElements(internalName: String): List<String> = if (internalName.endsWith("FieldReverseEngineeringPolicy")) listOf(AiPolicyMarker.ELEMENT_NAME) else emptyList()
 
     fun writeRuntime(destination: Path, bridge: BridgeModel) {
         bridge.loaderInternalClassName?.let { loaderInternalClassName ->
@@ -91,7 +121,7 @@ internal object SupportClassFiles {
         Files.write(output, writer.toByteArray())
     }
 
-    private fun annotationClassBytes(internalName: String): ByteArray {
+    private fun annotationClassBytes(internalName: String, elements: List<String> = emptyList()): ByteArray {
         val writer = ClassWriter(0)
         writer.visit(
             Opcodes.V1_8,
@@ -111,6 +141,17 @@ internal object SupportClassFiles {
                 visitEnd()
             }
             visitEnd()
+        }
+        // ReverseEngineeringPolicy 的 value 元素是注入的 policy JSON 文档;KeepString 等
+        // 无元素注解不合成方法。
+        elements.forEach { elementName ->
+            writer.visitMethod(
+                Opcodes.ACC_PUBLIC or Opcodes.ACC_ABSTRACT,
+                elementName,
+                "()Ljava/lang/String;",
+                null,
+                null,
+            ).visitEnd()
         }
         writer.visitEnd()
         return writer.toByteArray()

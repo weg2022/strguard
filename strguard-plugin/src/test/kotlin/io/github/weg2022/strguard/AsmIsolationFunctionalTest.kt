@@ -2,6 +2,7 @@ package io.github.weg2022.strguard
 
 import org.gradle.testkit.runner.GradleRunner
 import org.gradle.testkit.runner.TaskOutcome
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable
 import org.junit.jupiter.api.io.TempDir
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
@@ -13,6 +14,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
+@EnabledIfEnvironmentVariable(named = "STRGUARD_FUNCTIONAL_TEST", matches = "true")
 class AsmIsolationFunctionalTest {
     @TempDir
     lateinit var projectDirectory: Path

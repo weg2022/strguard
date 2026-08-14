@@ -80,6 +80,23 @@ abstract class TransformClassesTask : DefaultTask() {
     @get:Input
     abstract val keepSourceDebugExtensionPackages: ListProperty<String>
 
+    @get:Input
+    abstract val aiPolicyEnabled: Property<Boolean>
+
+    @get:Optional
+    @get:Input
+    abstract val aiPolicyContact: Property<String>
+
+    @get:Input
+    abstract val aiPolicyExceptions: ListProperty<String>
+
+    @get:Input
+    abstract val aiPolicyPackages: ListProperty<String>
+
+    /** 声明者坐标(group:artifact:version),配置期编码后传入,执行期不得访问 project。 */
+    @get:Input
+    abstract val moduleCoordinates: Property<String>
+
     @TaskAction
     fun transform() {
         val settings =
@@ -92,6 +109,12 @@ abstract class TransformClassesTask : DefaultTask() {
                 keepStringPackages = keepStringPackages.get(),
                 removeSourceDebugExtensionPackages = removeSourceDebugExtensionPackages.get(),
                 keepSourceDebugExtensionPackages = keepSourceDebugExtensionPackages.get(),
+                aiPolicyEnabled = aiPolicyEnabled.get(),
+                aiPolicyContact = aiPolicyContact.orNull,
+                aiPolicyExceptions = aiPolicyExceptions.get(),
+                aiPolicyPackages = aiPolicyPackages.get(),
+                moduleCoordinates = decodeModuleCoordinates(moduleCoordinates.get())
+                    .takeIf { coordinates -> coordinates.artifact.isNotEmpty() },
             )
         val sources = collectInputFiles()
         // COMPUTE_FRAMES 合并帧时需要加载项目类型(见 FramesComputingClassWriter)：
@@ -189,6 +212,9 @@ abstract class TransformClassesTask : DefaultTask() {
                 )
             handleCoverage(settings, stringCoverage, reports, reportsOutput, report)
             SupportClassFiles.writeRuntime(destination, builder.bridge)
+            if (settings.aiPolicyEnabled) {
+                SupportClassFiles.writePolicyAnnotation(destination)
+            }
             builder.writeNativeInputs(nativeInputs).close()
             writeReport(reports, report)
             commitOutputs(destination, destinationOutput, nativeInputs, nativeInputsOutput, reports, reportsOutput)

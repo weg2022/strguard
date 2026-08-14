@@ -8,6 +8,7 @@ import org.gradle.api.file.*
 import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.*
+import org.gradle.api.tasks.Optional
 import org.objectweb.asm.ClassReader
 import java.io.BufferedOutputStream
 import java.net.URLClassLoader
@@ -77,6 +78,23 @@ abstract class TransformAndroidClassesTask : DefaultTask() {
     @get:Input
     abstract val keepSourceDebugExtensionPackages: ListProperty<String>
 
+    @get:Input
+    abstract val aiPolicyEnabled: Property<Boolean>
+
+    @get:Optional
+    @get:Input
+    abstract val aiPolicyContact: Property<String>
+
+    @get:Input
+    abstract val aiPolicyExceptions: ListProperty<String>
+
+    @get:Input
+    abstract val aiPolicyPackages: ListProperty<String>
+
+    /** 声明者坐标(group:artifact:version),配置期编码后传入,执行期不得访问 project。 */
+    @get:Input
+    abstract val moduleCoordinates: Property<String>
+
     @TaskAction
     fun transform() {
         val settings =
@@ -89,6 +107,12 @@ abstract class TransformAndroidClassesTask : DefaultTask() {
                 keepStringPackages = keepStringPackages.get(),
                 removeSourceDebugExtensionPackages = removeSourceDebugExtensionPackages.get(),
                 keepSourceDebugExtensionPackages = keepSourceDebugExtensionPackages.get(),
+                aiPolicyEnabled = aiPolicyEnabled.get(),
+                aiPolicyContact = aiPolicyContact.orNull,
+                aiPolicyExceptions = aiPolicyExceptions.get(),
+                aiPolicyPackages = aiPolicyPackages.get(),
+                moduleCoordinates = decodeModuleCoordinates(moduleCoordinates.get())
+                    .takeIf { coordinates -> coordinates.artifact.isNotEmpty() },
             )
         val entries = collectEntries()
         // COMPUTE_FRAMES 合并帧时需要加载项目类型(见 FramesComputingClassWriter)：
@@ -185,7 +209,7 @@ abstract class TransformAndroidClassesTask : DefaultTask() {
                     removedSourceDebugExtensions = removedSourceDebugExtensions.size,
                 )
             handleCoverage(settings, stringCoverage, reports, reportsOutput, report)
-            addSupportClasses(outputEntries, builder)
+            addSupportClasses(outputEntries, builder, settings.aiPolicyEnabled)
             builder.writeNativeInputs(nativeInputs).close()
             writeOutputJar(outputEntries, stagedOutput)
             writeReport(reports, report)
@@ -282,10 +306,14 @@ abstract class TransformAndroidClassesTask : DefaultTask() {
     private fun addSupportClasses(
         entries: MutableMap<String, ByteArray>,
         vaultBuilder: SecureVaultBuilder,
+        aiPolicyEnabled: Boolean,
     ) {
         val supportDirectory = temporaryDir.toPath().resolve("support-classes")
         resetDirectory(supportDirectory)
         SupportClassFiles.writeRuntime(supportDirectory, vaultBuilder.bridge)
+        if (aiPolicyEnabled) {
+            SupportClassFiles.writePolicyAnnotation(supportDirectory)
+        }
         Files.walk(supportDirectory).use { paths ->
             paths.filter(Files::isRegularFile).forEach { source ->
                 val entryName = supportDirectory.relativize(source).toString().replace('\\', '/')

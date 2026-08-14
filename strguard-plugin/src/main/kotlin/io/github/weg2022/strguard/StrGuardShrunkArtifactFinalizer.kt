@@ -1,8 +1,11 @@
 package io.github.weg2022.strguard
 
 import org.gradle.api.GradleException
+import org.objectweb.asm.AnnotationVisitor
+import org.objectweb.asm.Attribute
 import org.objectweb.asm.ClassReader
 import org.objectweb.asm.ClassVisitor
+import org.objectweb.asm.FieldVisitor
 import org.objectweb.asm.MethodVisitor
 import org.objectweb.asm.Opcodes
 import java.io.ByteArrayInputStream
@@ -46,6 +49,7 @@ internal object StrGuardShrunkArtifactFinalizer {
         if (metadata.loaderClass.isNotEmpty()) {
             verifyGeneratedClass(outputEntries, metadata.loaderClass, emptyList())
         }
+        verifyPolicyMarker(protectedEntries, outputEntries)
         metadata.nativeResources.forEach { (resourcePath, expectedHash) ->
             val protectedResource = protectedEntries[resourcePath]
                 ?: throw GradleException("StrGuard protected JAR is missing Native resource $resourcePath")
@@ -132,6 +136,103 @@ internal object StrGuardShrunkArtifactFinalizer {
         if (missing.isNotEmpty()) {
             throw GradleException("Shrinker removed or renamed StrGuard Native gateways: ${missing.joinToString()}")
         }
+    }
+
+    /**
+     * 校验 AI 逆向禁止策略标记在 shrink 后仍可识别。protected jar 中只要有一个类带
+     * 注解(即功能开启),shrunk jar 就必须至少一个类仍带——证明 -keepattributes
+     * RuntimeInvisibleAnnotations 规则生效;类合并/删除是 shrinker 的正常行为,不追究
+     * 单个类的丢失。冗余 StrGuard-AiPolicy attribute 仅告警:注解是主载体,R8 的 DEX
+     * 格式无法承载任意 class-file attribute,ProGuard 用户可自行追加 keep 规则。
+     */
+    private fun verifyPolicyMarker(
+        protectedEntries: Map<String, ByteArray>,
+        outputEntries: Map<String, ByteArray>,
+    ) {
+        val markedInProtected = protectedEntries.any { (entryName, bytes) ->
+            entryName.endsWith(".class") && hasPolicyAnnotation(bytes)
+        }
+        if (!markedInProtected) return // 功能未开启,无标记可校验
+
+        val markedInShrunk = outputEntries.any { (entryName, bytes) ->
+            entryName.endsWith(".class") && hasPolicyAnnotation(bytes)
+        }
+        if (!markedInShrunk) {
+            throw GradleException(
+                "Shrinker removed the StrGuard AI reverse-engineering prohibition marker " +
+                    "(${AiPolicyMarker.ALL_ANNOTATION_DESCRIPTORS.joinToString()}); add '-keepattributes " +
+                    "RuntimeInvisibleAnnotations' to your ProGuard/R8 configuration",
+            )
+        }
+        val attributeInShrunk = outputEntries.any { (entryName, bytes) ->
+            entryName.endsWith(".class") && hasPolicyAttribute(bytes)
+        }
+        if (!attributeInShrunk) {
+            System.err.println(
+                "StrGuard: the redundant AI policy attribute ${AiPolicyMarker.ATTRIBUTE_NAME} did not survive " +
+                    "shrinking; the RuntimeInvisibleAnnotations marker is still present. Desktop ProGuard users can " +
+                    "keep it with '-keepattributes ${AiPolicyMarker.ATTRIBUTE_NAME}'",
+            )
+        }
+    }
+
+    private fun hasPolicyAnnotation(bytes: ByteArray): Boolean {
+        var found = false
+        ClassReader(bytes).accept(
+            object : ClassVisitor(Opcodes.ASM9) {
+                override fun visitAnnotation(descriptor: String?, visible: Boolean): AnnotationVisitor? {
+                    if (descriptor in AiPolicyMarker.ALL_ANNOTATION_DESCRIPTORS && !visible) found = true
+                    return null
+                }
+
+                override fun visitMethod(
+                    access: Int,
+                    name: String?,
+                    descriptor: String?,
+                    signature: String?,
+                    exceptions: Array<out String>?,
+                ): MethodVisitor? {
+                    // 不委托 super:ClassVisitor 默认返回 null,委托会丢失所有方法级回调。
+                    return object : MethodVisitor(Opcodes.ASM9) {
+                        override fun visitAnnotation(annotationDescriptor: String?, visible: Boolean): AnnotationVisitor? {
+                            if (annotationDescriptor in AiPolicyMarker.ALL_ANNOTATION_DESCRIPTORS && !visible) found = true
+                            return null
+                        }
+                    }
+                }
+
+                override fun visitField(
+                    access: Int,
+                    name: String?,
+                    descriptor: String?,
+                    signature: String?,
+                    value: Any?,
+                ): FieldVisitor? {
+                    // 不委托 super:ClassVisitor 默认返回 null,委托会丢失所有字段级回调。
+                    return object : FieldVisitor(Opcodes.ASM9) {
+                        override fun visitAnnotation(annotationDescriptor: String?, visible: Boolean): AnnotationVisitor? {
+                            if (annotationDescriptor in AiPolicyMarker.ALL_ANNOTATION_DESCRIPTORS && !visible) found = true
+                            return null
+                        }
+                    }
+                }
+            },
+            ClassReader.SKIP_CODE or ClassReader.SKIP_DEBUG or ClassReader.SKIP_FRAMES,
+        )
+        return found
+    }
+
+    private fun hasPolicyAttribute(bytes: ByteArray): Boolean {
+        var found = false
+        ClassReader(bytes).accept(
+            object : ClassVisitor(Opcodes.ASM9) {
+                override fun visitAttribute(attribute: Attribute?) {
+                    if (attribute?.type == AiPolicyMarker.ATTRIBUTE_NAME) found = true
+                }
+            },
+            ClassReader.SKIP_CODE or ClassReader.SKIP_DEBUG or ClassReader.SKIP_FRAMES,
+        )
+        return found
     }
 
     private fun verifyOutputMarker(

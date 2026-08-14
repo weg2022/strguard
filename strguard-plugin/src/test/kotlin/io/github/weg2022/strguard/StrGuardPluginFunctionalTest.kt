@@ -3,6 +3,7 @@ package io.github.weg2022.strguard
 import org.gradle.testkit.runner.GradleRunner
 import org.gradle.testkit.runner.TaskOutcome
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable
 import org.junit.jupiter.api.io.TempDir
 import org.objectweb.asm.*
 import java.net.URLClassLoader
@@ -15,6 +16,7 @@ import java.util.Properties
 import java.util.jar.JarFile
 import kotlin.test.*
 
+@EnabledIfEnvironmentVariable(named = "STRGUARD_FUNCTIONAL_TEST", matches = "true")
 class StrGuardPluginFunctionalTest {
     @TempDir
     lateinit var projectDirectory: Path

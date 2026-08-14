@@ -93,6 +93,65 @@ class TransformSettingsTest {
     }
 
     @Test
+    fun `ai policy marker is off by default and respects the enabled switch`() {
+        assertFalse(settings().shouldApplyAiPolicy("sample/Example"))
+        assertFalse(
+            settings(aiPolicyEnabled = true, enabled = false).shouldApplyAiPolicy("sample/Example"),
+        )
+    }
+
+    @Test
+    fun `ai policy selection follows package boundaries and excludes support classes`() {
+        val settings = settings(
+            enabled = true,
+            aiPolicyEnabled = true,
+            aiPolicyPackages = listOf("sample.app"),
+        )
+
+        assertTrue(settings.shouldApplyAiPolicy("sample/app/internal/Secret"))
+        assertFalse(settings.shouldApplyAiPolicy("sample/application/NotIncluded"))
+        assertFalse(settings.shouldApplyAiPolicy("io/github/weg2022/strguard/generated/Bridge"))
+        assertFalse(settings.shouldApplyAiPolicy("io/github/weg2022/strguard/annotation/ReverseEngineeringPolicy"))
+    }
+
+    @Test
+    fun `empty ai policy packages selects every eligible class`() {
+        val settings = settings(enabled = true, aiPolicyEnabled = true)
+
+        assertTrue(settings.shouldApplyAiPolicy("sample/anything/AtAll"))
+        assertFalse(settings.shouldApplyAiPolicy("io/github/weg2022/strguard/internal/Internal"))
+    }
+
+    @Test
+    fun `marker-only classes are transformed and validated`() {
+        val settings = settings(
+            enabled = true,
+            aiPolicyEnabled = true,
+            stringGuardPackages = listOf("other.pkg"),
+            removeSourceDebugExtension = false,
+        )
+
+        assertTrue(settings.shouldTransformClass("sample/MarkerOnly"))
+        assertFalse(settings.shouldTransformStrings("sample/MarkerOnly"))
+        assertTrue(settings.shouldApplyAiPolicy("sample/MarkerOnly"))
+    }
+
+    @Test
+    fun `ai policy explicit includes are validated against eligible classes`() {
+        val settings = settings(
+            enabled = true,
+            aiPolicyEnabled = true,
+            aiPolicyPackages = listOf("missing.policy.package"),
+        )
+
+        val failure = assertFailsWith<IllegalArgumentException> {
+            settings.analyzeClasses(listOf("sample/empty/NoLiteral"))
+        }
+        assertContains(failure.message.orEmpty(), "aiPolicyPackages")
+        assertContains(failure.message.orEmpty(), "missing/policy/package")
+    }
+
+    @Test
     fun `report properties use a deterministic aggregate-only schema`() {
         val report =
             TransformReport(
@@ -154,12 +213,14 @@ class TransformSettingsTest {
     }
 
     private fun settings(
-        enabled: Boolean,
-        removeSourceDebugExtension: Boolean,
+        enabled: Boolean = true,
+        removeSourceDebugExtension: Boolean = false,
         stringGuardPackages: List<String> = emptyList(),
         keepStringPackages: List<String> = emptyList(),
         removeSourceDebugExtensionPackages: List<String> = emptyList(),
         keepSourceDebugExtensionPackages: List<String> = emptyList(),
+        aiPolicyEnabled: Boolean = false,
+        aiPolicyPackages: List<String> = emptyList(),
     ): TransformSettings = TransformSettings(
         enabled = enabled,
         java9StringConcatEnabled = true,
@@ -168,5 +229,7 @@ class TransformSettingsTest {
         keepStringPackages = keepStringPackages,
         removeSourceDebugExtensionPackages = removeSourceDebugExtensionPackages,
         keepSourceDebugExtensionPackages = keepSourceDebugExtensionPackages,
+        aiPolicyEnabled = aiPolicyEnabled,
+        aiPolicyPackages = aiPolicyPackages,
     )
 }
